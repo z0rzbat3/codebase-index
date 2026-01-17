@@ -10,6 +10,7 @@ import argparse
 import json
 import logging
 import sys
+import warnings
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -178,9 +179,25 @@ def main() -> None:
         if not config_path.exists():
             print(f"Error: Config file '{config_path}' does not exist", file=sys.stderr)
             sys.exit(1)
-        if args.verbose:
-            print(f"Loading config from: {config_path}", file=sys.stderr)
         config = load_config(config_path)
+        if args.verbose:
+            print(f"Loaded config: {config_path}", file=sys.stderr)
+            # Show what's in the config
+            routes = config.get("routes", {}).get("patterns", [])
+            models = config.get("models", {}).get("patterns", [])
+            schemas = config.get("schemas", {}).get("patterns", [])
+            auth = config.get("auth", {}).get("patterns", [])
+            exclude = config.get("exclude", {})
+            exclude_dirs = exclude.get("directories", [])
+            exclude_exts = exclude.get("extensions", [])
+            print(f"  routes: {len(routes)} patterns", file=sys.stderr)
+            print(f"  models: {len(models)} patterns", file=sys.stderr)
+            print(f"  schemas: {len(schemas)} patterns", file=sys.stderr)
+            print(f"  auth: {len(auth)} patterns", file=sys.stderr)
+            if exclude_dirs or exclude_exts:
+                print(f"  exclude: {len(exclude_dirs)} dirs, {len(exclude_exts)} extensions", file=sys.stderr)
+            else:
+                print(f"  exclude: none configured", file=sys.stderr)
 
     # Check if we have call graph query options
     has_cg_query = args.cg_query or args.cg_file or args.cg_callers
@@ -238,9 +255,20 @@ def scan_codebase(args: argparse.Namespace, config: dict[str, Any]) -> dict[str,
     if args.exclude:
         exclude.extend(args.exclude)
 
-    # Add directory exclusions
+    # Add directory exclusions from CLI
     if args.exclude_dirs:
         exclude.extend(args.exclude_dirs)
+
+    # Add directory exclusions from config
+    config_exclude = config.get("exclude", {})
+    config_dirs = config_exclude.get("directories", [])
+    if config_dirs:
+        exclude.extend(config_dirs)
+
+    # Add pattern exclusions from config
+    config_patterns = config_exclude.get("patterns", [])
+    if config_patterns:
+        exclude.extend(config_patterns)
 
     # Add extension exclusions (normalize to have leading dot)
     exclude_extensions: set[str] = set()
@@ -250,12 +278,23 @@ def scan_codebase(args: argparse.Namespace, config: dict[str, Any]) -> dict[str,
                 ext = '.' + ext
             exclude_extensions.add(ext.lower())
 
+    # Add extension exclusions from config
+    config_exts = config_exclude.get("extensions", [])
+    for ext in config_exts:
+        if not ext.startswith('.'):
+            ext = '.' + ext
+        exclude_extensions.add(ext.lower())
+
     if args.verbose:
         print(f"Scanning: {root}", file=sys.stderr)
+        if config_dirs:
+            print(f"Config excluded directories: {config_dirs}", file=sys.stderr)
         if args.exclude_dirs:
-            print(f"Excluding directories: {args.exclude_dirs}", file=sys.stderr)
-        if exclude_extensions:
-            print(f"Excluding extensions: {sorted(exclude_extensions)}", file=sys.stderr)
+            print(f"CLI excluded directories: {args.exclude_dirs}", file=sys.stderr)
+        if config_exts:
+            print(f"Config excluded extensions: {config_exts}", file=sys.stderr)
+        if args.exclude_ext:
+            print(f"CLI excluded extensions: {args.exclude_ext}", file=sys.stderr)
 
     scanner = CodebaseScanner(
         root=root,
@@ -265,7 +304,10 @@ def scan_codebase(args: argparse.Namespace, config: dict[str, Any]) -> dict[str,
         config=config,
     )
 
-    return scanner.scan()
+    # Suppress SyntaxWarnings from scanned files (e.g., invalid escape sequences)
+    with warnings.catch_warnings():
+        warnings.filterwarnings("ignore", category=SyntaxWarning)
+        return scanner.scan()
 
 
 def handle_cg_query(args: argparse.Namespace, result: dict[str, Any]) -> None:

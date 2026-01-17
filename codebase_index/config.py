@@ -254,6 +254,13 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "max_function_lines": 50,
         "max_class_methods": 20,
     },
+
+    # Exclusion patterns (applied in addition to CLI exclusions)
+    "exclude": {
+        "directories": [],  # e.g., [".archive", "docs", "vendor"]
+        "extensions": [],   # e.g., [".md", ".txt", ".log"]
+        "patterns": [],     # e.g., ["*.generated.*", "*.min.js"]
+    },
 }
 
 
@@ -484,4 +491,29 @@ complexity:
   max_file_lines: 500
   max_function_lines: 50
   max_class_methods: 20
+
+# =============================================================================
+# EXCLUSIONS
+# =============================================================================
+# Directories and files to exclude from scanning.
+# These are applied IN ADDITION to CLI --exclude-dirs and --exclude-ext flags.
+# =============================================================================
+exclude:
+  # Directories to skip (relative to root)
+  directories:
+    # - .archive
+    # - docs
+    # - vendor
+    # - third-party
+
+  # File extensions to skip
+  extensions:
+    # - .md
+    # - .txt
+    # - .log
+
+  # Glob patterns to skip
+  patterns:
+    # - "*.generated.*"
+    # - "*.min.js"
 '''
