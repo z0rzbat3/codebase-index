@@ -554,3 +554,82 @@ class CodebaseScanner:
         summary["total_duplicated_functions"] = sum(
             d["count"] for d in result["potential_duplicates"]
         )
+
+        # Generate README badges
+        result["badges"] = self._generate_badges(summary)
+
+    def _generate_badges(self, summary: dict[str, Any]) -> dict[str, Any]:
+        """
+        Generate shields.io badge URLs for README.
+
+        Returns both individual badge URLs and a ready-to-paste markdown block.
+        """
+        from urllib.parse import quote
+
+        def badge_url(label: str, value: str, color: str) -> str:
+            """Generate a shields.io badge URL."""
+            label_encoded = quote(label, safe="")
+            value_encoded = quote(str(value), safe="")
+            return f"https://img.shields.io/badge/{label_encoded}-{value_encoded}-{color}"
+
+        def format_number(n: int) -> str:
+            """Format large numbers (e.g., 11770 -> 11.8k)."""
+            if n >= 1000:
+                return f"{n/1000:.1f}k"
+            return str(n)
+
+        # Calculate documentation coverage
+        total_funcs = summary.get("total_functions", 0)
+        doc_funcs = summary.get("documented_functions", 0)
+        doc_coverage = round(doc_funcs / total_funcs * 100) if total_funcs > 0 else 0
+
+        # Determine colors based on values
+        doc_color = "brightgreen" if doc_coverage >= 80 else "yellow" if doc_coverage >= 50 else "red"
+        test_cov = summary.get("test_coverage_percent", 0)
+        test_color = "brightgreen" if test_cov >= 80 else "yellow" if test_cov >= 50 else "red"
+
+        badges = {
+            "files": {
+                "url": badge_url("files", str(summary.get("total_files", 0)), "blue"),
+                "markdown": f"![Files]({badge_url('files', str(summary.get('total_files', 0)), 'blue')})",
+            },
+            "lines": {
+                "url": badge_url("lines", format_number(summary.get("total_lines", 0)), "blue"),
+                "markdown": f"![Lines]({badge_url('lines', format_number(summary.get('total_lines', 0)), 'blue')})",
+            },
+            "functions": {
+                "url": badge_url("functions", str(summary.get("total_functions", 0)), "blue"),
+                "markdown": f"![Functions]({badge_url('functions', str(summary.get('total_functions', 0)), 'blue')})",
+            },
+            "classes": {
+                "url": badge_url("classes", str(summary.get("total_classes", 0)), "blue"),
+                "markdown": f"![Classes]({badge_url('classes', str(summary.get('total_classes', 0)), 'blue')})",
+            },
+            "doc_coverage": {
+                "url": badge_url("doc coverage", f"{doc_coverage}%", doc_color),
+                "markdown": f"![Doc Coverage]({badge_url('doc coverage', f'{doc_coverage}%', doc_color)})",
+            },
+            "test_coverage": {
+                "url": badge_url("test coverage", f"{test_cov}%", test_color),
+                "markdown": f"![Test Coverage]({badge_url('test coverage', f'{test_cov}%', test_color)})",
+            },
+            "api_endpoints": {
+                "url": badge_url("endpoints", str(summary.get("api_endpoints_count", 0)), "green"),
+                "markdown": f"![Endpoints]({badge_url('endpoints', str(summary.get('api_endpoints_count', 0)), 'green')})",
+            },
+            "todos": {
+                "url": badge_url("TODOs", str(summary.get("todos_count", 0)), "orange"),
+                "markdown": f"![TODOs]({badge_url('TODOs', str(summary.get('todos_count', 0)), 'orange')})",
+            },
+        }
+
+        # Generate combined markdown block
+        primary_badges = ["files", "lines", "doc_coverage"]
+        if summary.get("api_endpoints_count", 0) > 0:
+            primary_badges.append("api_endpoints")
+        if summary.get("test_coverage_percent", 0) > 0:
+            primary_badges.append("test_coverage")
+
+        badges["markdown_block"] = " ".join(badges[b]["markdown"] for b in primary_badges)
+
+        return badges

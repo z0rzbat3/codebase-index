@@ -363,6 +363,7 @@ class PythonParser(BaseParser):
         signature: dict[str, Any] = {
             "params": [],
             "return_type": None,
+            "formatted": None,  # Human-readable formatted signature
         }
 
         args = node.args
@@ -406,7 +407,47 @@ class PythonParser(BaseParser):
         if node.returns:
             signature["return_type"] = self._get_annotation(node.returns)
 
+        # Generate formatted signature for markdown output
+        signature["formatted"] = self._format_signature(node, signature)
+
         return signature
+
+    def _format_signature(
+        self,
+        node: ast.FunctionDef | ast.AsyncFunctionDef,
+        signature: dict[str, Any],
+    ) -> str:
+        """
+        Generate a formatted, markdown-ready signature string.
+
+        Example output: "async def fetch_data(url: str, timeout: int = 30) -> Response"
+        """
+        parts = []
+
+        # async prefix
+        if isinstance(node, ast.AsyncFunctionDef):
+            parts.append("async ")
+
+        parts.append(f"def {node.name}(")
+
+        # Format parameters
+        param_strs = []
+        for param in signature["params"]:
+            param_str = param["name"]
+            if param.get("type"):
+                param_str += f": {param['type']}"
+            if param.get("has_default"):
+                param_str += " = ..."
+            param_strs.append(param_str)
+
+        parts.append(", ".join(param_strs))
+        parts.append(")")
+
+        # Return type
+        if signature.get("return_type"):
+            parts.append(f" -> {signature['return_type']}")
+
+        return "".join(parts)
 
     def _get_annotation(self, node: ast.expr | None) -> str | None:
         """Extract type annotation as string."""
