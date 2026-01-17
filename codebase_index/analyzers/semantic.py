@@ -221,8 +221,13 @@ class SemanticSearcher:
         # Extract actual code body
         code_body = self._extract_code_body(source_lines, line)
 
-        # Build text for embedding: name + docstring + code body
+        # Build text for embedding: name + summary + docstring + code body
         text_parts = [full_name]
+
+        # Add LLM-generated summary (high value for conceptual queries)
+        summary = symbol.get("summary", "")
+        if summary:
+            text_parts.append(summary)
 
         # Add docstring
         docstring = symbol.get("docstring", "")
@@ -262,6 +267,7 @@ class SemanticSearcher:
             "file": file_path,
             "line": line,
             "text": full_text,
+            "summary": summary,  # LLM-generated summary for conceptual matching
             "docstring": docstring[:200] if docstring else "",
             "code_preview": code_body[:200] if code_body else "",
         }
@@ -382,13 +388,19 @@ class SemanticSearcher:
                 break
 
             symbol = self._symbols[idx]
+            # Prefer summary > docstring > code_preview for snippet
+            snippet = (
+                symbol.get("summary")
+                or symbol.get("docstring", "")[:100]
+                or symbol.get("code_preview", "")
+            )
             results.append({
                 "symbol": symbol["name"],
                 "type": symbol["type"],
                 "file": symbol["file"],
                 "line": symbol["line"],
                 "score": round(score, 3),
-                "snippet": symbol.get("code_preview", "") or symbol.get("docstring", "")[:100],
+                "snippet": snippet,
             })
 
         return {
