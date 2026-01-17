@@ -47,7 +47,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 # Tool version
-VERSION = "2.0.0"
+VERSION = "2.2.0"
 
 
 class CodebaseScanner:
