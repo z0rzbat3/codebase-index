@@ -256,8 +256,31 @@ codebase-index --load index.json --coupled-with "src/api/services/chat_service.p
 - [x] TODO tracking
 - [x] Environment variable tracking
 
+### LLM Summaries - Now Tested ⚠️
+
+**Test Setup:**
+- Provider: OpenRouter
+- Model: mistralai/ministral-8b-2512
+
+**Results:**
+```
+Generated: 52 summaries
+Cached: 0
+Skipped: 1615 (functions with docstrings or trivial)
+```
+
+**Sample Summaries (quality is good):**
+- `upgrade`: "Migrates database schema to add JSON config column, updates workspace statuses, and creates user-workspace link table"
+- `validate_transport`: "Validates input as either SSE or HTTP transport protocol"
+
+**Issue Found:** Summaries are stored in a separate cache by content hash, but NOT linked to the function entries in `call_graph`. This means:
+- ✅ Summaries are generated and cached
+- ❌ Cannot query "show me summary for function X"
+- ❌ Semantic search doesn't use summaries
+
+**Recommendation:** Link summaries to their functions via a `summary_hash` field or inline the summary directly.
+
 ### Not Tested
-- [ ] LLM summaries generation (requires API key)
 - [ ] Alternative embedding models (codebert, codet5, minilm)
 
 ### Limitations
@@ -311,3 +334,112 @@ The tool successfully addresses all features from my original wishlist:
 - ✅ Incremental updates
 
 **This is now an A+ tool for my workflow.**
+
+---
+
+## Extended Testing - Round 2 (Additional Findings)
+
+**Date:** 2026-01-17 (continued testing)
+
+### Test Mapper Inconsistency Bug 🐛
+
+**Issue Discovered:** `--tests-for` feature is inconsistent - some symbols are found, others are not.
+
+**Evidence:**
+
+| Symbol | `--tests-for` Result | Actual Usage (via grep) |
+|--------|---------------------|-------------------------|
+| ChatService | ✅ 5 files, 22 functions | Matches |
+| AgentSpawner | ✅ 3 files, 2 functions | Matches |
+| AgentFactory | ❌ Empty | 8+ files use it! |
+| MCPServer | ❌ Empty | Multiple files use it |
+| build_hierarchical | ❌ Empty | Tests exist |
+
+**Verification:**
+```bash
+# grep confirms 8+ test files reference AgentFactory
+grep -r "AgentFactory" tests/ --include="*.py" | wc -l
+# Returns 20+ matches
+
+# But the tool returns nothing
+codebase-index --load index.json --tests-for "AgentFactory"
+# Returns: empty
+
+# Meanwhile, --cg-callers finds 12 callers correctly
+codebase-index --load index.json --cg-callers "AgentFactory"
+# Returns: 12 matches
+```
+
+**Recommendation:** Debug the `--tests-for` feature - the symbol lookup or filtering logic is inconsistent.
+
+---
+
+### Semantic Search Threshold Behavior
+
+**Finding:** Semantic search has a relevance threshold that filters results. Generic queries often return empty.
+
+| Query | Results |
+|-------|---------|
+| "database connection pooling" | Empty |
+| "websocket streaming events" | Empty |
+| "chat message" | Empty |
+| "retry" | Empty |
+| "agent spawner" | ✅ 3 results (0.39, 0.35, 0.32 scores) |
+| "mcp server connection" | ✅ 4 results |
+| "pydantic model validation" | ✅ 4 results |
+
+**Observation:** Queries that closely match symbol names work well. Abstract concept queries often fall below threshold.
+
+**Recommendation:** Consider exposing `--search-threshold` flag or lowering default threshold.
+
+---
+
+### Coupling Analysis - Additional Verification ✅
+
+Tested on `agent_factory.py`:
+
+```json
+{
+  "file": "src/openai_agents/agent_factory.py",
+  "coupled_files": [
+    {"file": "src/openai_agents/mcp_tool_wrapper.py", "score": 0.44},
+    {"file": "tests/test_agent_chat_integration.py", "score": 0.31},
+    {"file": "src/openai_agents/agent_definition.py", "score": 0.31},
+    {"file": "src/frontend/src/types/agent.ts", "score": 0.27}
+  ]
+}
+```
+
+**Cross-language detection works:** TypeScript file `agent.ts` detected via naming similarity even though it's a different language.
+
+---
+
+### Updated Issue List
+
+| Issue | Severity | Status |
+|-------|----------|--------|
+| **`--tests-for` inconsistency** | **Medium** | **NEW** |
+| **LLM summaries not linked to functions** | **Medium** | **NEW** |
+| TypeScript symbol extraction | Medium | Known |
+| Incremental update over-scans | Low | Known |
+| Staleness shows index file | Low | Known |
+| Semantic search threshold | Low | NEW |
+
+---
+
+### Final Assessment
+
+**Overall Grade: A-** (unchanged)
+
+The new `--tests-for` inconsistency bug is worth fixing, but it doesn't fundamentally break the tool. The semantic search threshold behavior is expected - embeddings are approximate matches, not keyword search.
+
+**Key Strengths:**
+1. Call graph queries are rock solid
+2. Coupling analysis is excellent
+3. Schema mapper is comprehensive
+4. Impact analysis for Python is transformative
+
+**For Production Use:**
+- Python-heavy codebases: Highly recommended
+- Mixed Python/TypeScript: Useful with caveats
+- TypeScript-only: Not recommended yet

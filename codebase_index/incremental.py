@@ -118,7 +118,12 @@ class IncrementalUpdater:
         }
 
     def _get_current_files(self) -> list[Path]:
-        """Get list of current files in codebase (respecting exclusions)."""
+        """Get list of current files in codebase (respecting exclusions and supported parsers)."""
+        from codebase_index.parsers.base import ParserRegistry
+
+        # Get supported extensions from ParserRegistry
+        supported_extensions = set(ParserRegistry._extension_map.keys())
+
         files = []
 
         for file_path in self.root.rglob("*"):
@@ -133,8 +138,17 @@ class IncrementalUpdater:
                 continue
 
             # Check extension exclusions
-            if file_path.suffix.lower() in self.exclude_extensions:
+            suffix = file_path.suffix.lower()
+            if suffix in self.exclude_extensions:
                 continue
+
+            # Only include files with supported parsers
+            # This prevents marking unsupported files (like .md, .txt) as "added"
+            if suffix not in supported_extensions:
+                # But keep files that were in the original index
+                # (in case they were added with a custom parser)
+                if rel_path not in self._existing_files:
+                    continue
 
             files.append(file_path)
 

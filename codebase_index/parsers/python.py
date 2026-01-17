@@ -120,7 +120,7 @@ class PythonParser(BaseParser):
         result: dict[str, Any] = {
             "classes": [],
             "functions": [],
-            "imports": {"internal": [], "external": []},
+            "imports": {"internal": [], "external": [], "names": []},  # names = imported symbols
             "routes": [],           # Generic routes (config-driven)
             "models": [],           # ORM models (config-driven)
             "schemas": [],          # Validation schemas (config-driven)
@@ -143,6 +143,11 @@ class PythonParser(BaseParser):
             elif isinstance(node, ast.ImportFrom):
                 if node.module:
                     self._categorize_import(node.module, result["imports"])
+                # Also store the imported names (e.g., 'AgentFactory' from 'from x import AgentFactory')
+                for alias in node.names:
+                    name = alias.name
+                    if name != "*":
+                        self._add_imported_name(name, result["imports"])
 
         return result
 
@@ -548,6 +553,13 @@ class PythonParser(BaseParser):
             logger.debug("Could not hash function body: %s", e)
             return None
 
+    def _add_imported_name(self, name: str, imports: dict[str, list[str]]) -> None:
+        """Add an imported symbol name to the names list."""
+        if "names" not in imports:
+            imports["names"] = []
+        if name not in imports["names"]:
+            imports["names"].append(name)
+
     def _categorize_import(self, module: str, imports: dict[str, list[str]]) -> None:
         """Categorize import as internal or external."""
         root_module = module.split(".")[0]
@@ -576,7 +588,7 @@ class PythonParser(BaseParser):
         result: dict[str, Any] = {
             "classes": [],
             "functions": [],
-            "imports": {"internal": [], "external": []},
+            "imports": {"internal": [], "external": [], "names": []},
             "routes": [],
             "models": [],
             "schemas": [],

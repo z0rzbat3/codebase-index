@@ -22,16 +22,32 @@ logger = logging.getLogger(__name__)
 class StalenessChecker:
     """Check if an index file is stale compared to the codebase."""
 
-    def __init__(self, root: Path, index_data: dict[str, Any]) -> None:
+    # Common index file patterns to exclude from staleness checks
+    INDEX_FILE_PATTERNS = [
+        "index.json",
+        "codebase_index.json",
+        "codebase-index.json",
+        ".codebase-index.json",
+        "*_index.json",
+    ]
+
+    def __init__(
+        self,
+        root: Path,
+        index_data: dict[str, Any],
+        index_file: Path | None = None,
+    ) -> None:
         """
         Initialize the staleness checker.
 
         Args:
             root: Root directory of the codebase.
             index_data: The loaded index data.
+            index_file: Path to the index file (to exclude from changes).
         """
         self.root = root
         self.index_data = index_data
+        self.index_file = index_file
 
     def check(self) -> dict[str, Any]:
         """
@@ -97,6 +113,11 @@ class StalenessChecker:
             result["changed_files"] = self._get_modified_files_since(
                 generated_at, indexed_files
             )
+
+        # Filter out the index file itself from changes
+        result["changed_files"] = self._filter_index_files(result["changed_files"])
+        result["new_files"] = self._filter_index_files(result["new_files"])
+        result["deleted_files"] = self._filter_index_files(result["deleted_files"])
 
         result["total_changes"] = (
             len(result["changed_files"])
@@ -226,6 +247,45 @@ class StalenessChecker:
                 pass
 
         return modified
+
+    def _filter_index_files(self, files: list[str]) -> list[str]:
+        """
+        Filter out index files from the change list.
+
+        Args:
+            files: List of file paths.
+
+        Returns:
+            Filtered list excluding index files.
+        """
+        import fnmatch
+
+        filtered = []
+        for filepath in files:
+            filename = Path(filepath).name
+
+            # Check if it matches the specific index file we loaded
+            if self.index_file:
+                try:
+                    index_rel = self.index_file.relative_to(self.root)
+                    if str(index_rel) == filepath:
+                        continue
+                except ValueError:
+                    # index_file is not relative to root
+                    if self.index_file.name == filename:
+                        continue
+
+            # Check against common index file patterns
+            is_index = False
+            for pattern in self.INDEX_FILE_PATTERNS:
+                if fnmatch.fnmatch(filename, pattern):
+                    is_index = True
+                    break
+
+            if not is_index:
+                filtered.append(filepath)
+
+        return filtered
 
     def _build_summary(self, result: dict[str, Any]) -> str:
         """Build a human-readable summary."""

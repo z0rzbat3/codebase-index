@@ -139,8 +139,17 @@ class TestMapper:
         method_name: str,
     ) -> bool:
         """Check if the imports contain the symbol."""
-        # Handle dict format: {"internal": [...], "external": [...]}
+        # Handle dict format: {"internal": [...], "external": [...], "names": [...]}
         if isinstance(imports, dict):
+            # First check the 'names' list for direct symbol matches
+            imported_names = imports.get("names", [])
+            if symbol in imported_names:
+                return True
+            if class_name and class_name in imported_names:
+                return True
+            if method_name in imported_names:
+                return True
+
             all_imports = []
             for key in ["internal", "external"]:
                 all_imports.extend(imports.get(key, []))

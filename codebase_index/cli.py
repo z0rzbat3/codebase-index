@@ -223,6 +223,11 @@ For best results:
         metavar="FILE",
         help="Find files tightly coupled to FILE (likely need changes together)",
     )
+    analysis_group.add_argument(
+        "--summary-for",
+        metavar="SYMBOL",
+        help="Get LLM-generated summary for a function/method (e.g., 'scan_file', 'Parser.parse')",
+    )
 
     # Advanced features
     advanced_group = parser.add_argument_group("Advanced Features")
@@ -246,6 +251,13 @@ For best results:
         metavar="MODEL",
         default="unixcoder",
         help="Embedding model: unixcoder (default), codebert, codet5, minilm, or HuggingFace name",
+    )
+    advanced_group.add_argument(
+        "--search-threshold",
+        metavar="SCORE",
+        type=float,
+        default=0.3,
+        help="Minimum similarity score for semantic search (0.0-1.0, default: 0.3). Lower = more results.",
     )
     advanced_group.add_argument(
         "--generate-summaries",
@@ -387,7 +399,8 @@ def main() -> None:
             print("Error: --check requires --load to specify an index file", file=sys.stderr)
             sys.exit(1)
         root = Path(args.path).resolve()
-        checker = StalenessChecker(root, result)
+        index_file = Path(args.load).resolve()
+        checker = StalenessChecker(root, result, index_file=index_file)
         staleness = checker.check()
         print(json.dumps(staleness, indent=2, default=str))
         return
@@ -419,6 +432,44 @@ def main() -> None:
         analyzer = CouplingAnalyzer(result)
         coupling_result = analyzer.analyze(args.coupled_with)
         print(json.dumps(coupling_result, indent=2, default=str))
+        return
+
+    # Handle --summary-for: get summary for a symbol
+    if args.summary_for:
+        symbol = args.summary_for
+        symbol_index = result.get("symbol_index", {})
+        matches = []
+
+        # Search functions
+        for func in symbol_index.get("functions", []):
+            if symbol.lower() in func.get("name", "").lower():
+                matches.append({
+                    "type": "function",
+                    "name": func.get("name"),
+                    "file": func.get("file"),
+                    "line": func.get("line"),
+                    "summary": func.get("summary") or func.get("docstring") or "(no summary)",
+                })
+
+        # Search methods (Class.method format)
+        for method in symbol_index.get("methods", []):
+            method_name = method.get("name", "")
+            class_name = method.get("class", "")
+            full_name = f"{class_name}.{method_name}"
+
+            if symbol.lower() in full_name.lower() or symbol.lower() in method_name.lower():
+                matches.append({
+                    "type": "method",
+                    "name": full_name,
+                    "file": method.get("file"),
+                    "line": method.get("line"),
+                    "summary": method.get("summary") or method.get("docstring") or "(no summary)",
+                })
+
+        if not matches:
+            print(json.dumps({"symbol": symbol, "error": "No matching symbols found"}, indent=2))
+        else:
+            print(json.dumps({"symbol": symbol, "matches": matches}, indent=2))
         return
 
     # Handle --build-embeddings: generate embeddings for semantic search
@@ -470,7 +521,8 @@ def main() -> None:
             )
             sys.exit(1)
 
-        search_result = semantic_search(result, args.search)
+        threshold = getattr(args, 'search_threshold', 0.3)
+        search_result = semantic_search(result, args.search, min_score=threshold)
         print(json.dumps(search_result, indent=2, default=str))
         return
 

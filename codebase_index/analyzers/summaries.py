@@ -414,7 +414,60 @@ def generate_summaries(
         "provider": result["provider"],
     }
 
+    # Update symbol_index with summaries (link summaries to queryable symbols)
+    _link_summaries_to_symbol_index(index_data)
+
     return index_data
+
+
+def _link_summaries_to_symbol_index(index_data: dict[str, Any]) -> None:
+    """
+    Link generated summaries to symbol_index entries.
+
+    After summaries are generated, they're stored in the exports dict.
+    This function copies them to symbol_index for easy querying.
+    """
+    symbol_index = index_data.get("symbol_index", {})
+
+    # Build lookup from (file, name) -> summary
+    summary_lookup: dict[tuple[str, str], str] = {}
+
+    for file_info in index_data.get("files", []):
+        file_path = file_info.get("path", "")
+        exports = file_info.get("exports", {})
+
+        # Functions
+        for func in exports.get("functions", []):
+            name = func.get("name", "")
+            summary = func.get("summary")
+            if summary:
+                summary_lookup[(file_path, name)] = summary
+
+        # Methods
+        for cls in exports.get("classes", []):
+            class_name = cls.get("name", "")
+            for method in cls.get("methods", []):
+                method_name = method.get("name", "")
+                summary = method.get("summary")
+                if summary:
+                    summary_lookup[(file_path, f"{class_name}.{method_name}")] = summary
+
+    # Update symbol_index functions
+    for func in symbol_index.get("functions", []):
+        file_path = func.get("file", "")
+        name = func.get("name", "")
+        key = (file_path, name)
+        if key in summary_lookup:
+            func["summary"] = summary_lookup[key]
+
+    # Update symbol_index methods
+    for method in symbol_index.get("methods", []):
+        file_path = method.get("file", "")
+        class_name = method.get("class", "")
+        method_name = method.get("name", "")
+        key = (file_path, f"{class_name}.{method_name}")
+        if key in summary_lookup:
+            method["summary"] = summary_lookup[key]
 
 
 def check_summaries_available() -> bool:

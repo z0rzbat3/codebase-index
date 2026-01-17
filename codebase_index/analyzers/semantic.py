@@ -439,6 +439,7 @@ def semantic_search(
     query: str,
     top_k: int = 10,
     model: str | None = None,
+    min_score: float = 0.3,
 ) -> dict[str, Any]:
     """
     Convenience function for semantic search.
@@ -448,6 +449,7 @@ def semantic_search(
         query: Search query.
         top_k: Number of results.
         model: Model to use (should match what was used for embeddings).
+        min_score: Minimum similarity score threshold (0.0-1.0). Lower = more results.
 
     Returns:
         Search results.
@@ -467,7 +469,7 @@ def semantic_search(
     searcher = SemanticSearcher(model_key=model_key)
     searcher.load_embeddings(embedding_data)
 
-    return searcher.search(query, top_k=top_k)
+    return searcher.search(query, top_k=top_k, min_score=min_score)
 
 
 def check_semantic_available() -> bool:
