@@ -89,6 +89,71 @@ export OPENAI_API_KEY=sk-...
 # Or pass via CLI: --api-key KEY --summary-provider PROVIDER
 ```
 
+## System Requirements
+
+### Base Tool (no optional features)
+- **Python:** 3.9+
+- **Memory:** Minimal (~50MB)
+- **Disk:** ~5MB
+
+### Semantic Search (`pip install codebase-index[semantic]`)
+
+Requires PyTorch and sentence-transformers:
+
+| Resource | Requirement |
+|----------|-------------|
+| **Disk** | ~3GB (PyTorch + models) |
+| **Memory (CPU)** | ~2GB for embedding generation |
+| **Memory (GPU)** | ~1GB VRAM (if using CUDA) |
+| **Model cache** | ~/.cache/huggingface/hub (~500MB per model) |
+
+**GPU Acceleration (optional but recommended for large codebases):**
+- NVIDIA GPU with CUDA support
+- CUDA 12.1+ drivers
+- Works on CPU if no GPU available (slower)
+
+**Embedding models:**
+| Model | Size | Best for |
+|-------|------|----------|
+| `unixcoder` (default) | ~500MB | Code search (recommended) |
+| `codebert` | ~500MB | Code + comments |
+| `codet5` | ~900MB | Code understanding |
+| `minilm` | ~90MB | Fast, general-purpose |
+
+### LLM Summaries (`pip install codebase-index[summaries]`)
+- **Disk:** ~10MB (httpx only)
+- **Memory:** Minimal
+- **Network:** API access to OpenRouter/Anthropic/OpenAI
+- **Cost:** ~$0.01-0.05 per 100 functions (depends on model)
+
+### Check Your Setup
+```bash
+# Check CUDA availability (for GPU acceleration)
+python -c "import torch; print('CUDA:', torch.cuda.is_available())"
+
+# Check available memory
+python -c "import torch; print('GPU Memory:', torch.cuda.get_device_properties(0).total_memory // 1e9, 'GB') if torch.cuda.is_available() else print('CPU only')"
+```
+
+### Troubleshooting
+
+**"CUDA out of memory":**
+```bash
+# Use CPU instead
+export CUDA_VISIBLE_DEVICES=""
+codebase-index . --build-embeddings -o index.json
+```
+
+**"No module named torch":**
+```bash
+# Reinstall with CUDA support
+pip install torch --index-url https://download.pytorch.org/whl/cu121
+```
+
+**Slow embedding generation:**
+- Use `--embedding-model minilm` for faster (but less accurate) results
+- Ensure GPU is being used: check `torch.cuda.is_available()`
+
 ## Project Structure
 
 ```
