@@ -113,6 +113,42 @@ class SemanticSearcher:
             )
         return self._model
 
+    def _encode_with_fallback(self, texts: list[str]) -> Any:
+        """
+        Encode texts with CUDA fallback to CPU on error.
+
+        Some models (e.g., unixcoder) can have CUDA index errors on certain GPUs.
+        This method catches those errors and retries on CPU.
+        """
+        try:
+            return self.model.encode(
+                texts,
+                show_progress_bar=True,
+                convert_to_numpy=True,
+            )
+        except (RuntimeError, Exception) as e:
+            error_msg = str(e).lower()
+            # Check for CUDA-related errors
+            if "cuda" in error_msg or "device-side assert" in error_msg or "accelerator" in error_msg:
+                logger.warning(
+                    "CUDA error during embedding generation, falling back to CPU: %s",
+                    str(e)[:100]
+                )
+                # Force CPU by moving model
+                try:
+                    self._model = self._model.to("cpu")
+                    return self.model.encode(
+                        texts,
+                        show_progress_bar=True,
+                        convert_to_numpy=True,
+                    )
+                except Exception as cpu_error:
+                    logger.error("CPU fallback also failed: %s", cpu_error)
+                    raise
+            else:
+                # Non-CUDA error, re-raise
+                raise
+
     def build_embeddings(
         self,
         index_data: dict[str, Any],
@@ -184,11 +220,7 @@ class SemanticSearcher:
 
         # Generate embeddings
         logger.info("Generating embeddings for %d symbols...", len(texts))
-        embeddings = self.model.encode(
-            texts,
-            show_progress_bar=True,
-            convert_to_numpy=True,
-        )
+        embeddings = self._encode_with_fallback(texts)
 
         # Store as list for JSON serialization
         self._embeddings = embeddings

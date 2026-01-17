@@ -270,6 +270,11 @@ For best results:
         help="Generate LLM summaries for functions (requires API key)",
     )
     advanced_group.add_argument(
+        "--force-summaries",
+        action="store_true",
+        help="Regenerate LLM summaries even for functions with existing docstrings",
+    )
+    advanced_group.add_argument(
         "--summary-provider",
         metavar="PROVIDER",
         choices=["openrouter", "anthropic", "openai"],
@@ -686,11 +691,15 @@ def main() -> None:
             )
             sys.exit(1)
 
+        force = getattr(args, 'force_summaries', False)
+
         if args.verbose:
             detected_provider = provider or get_available_provider()
             print(f"Generating LLM summaries (provider: {detected_provider})...", file=sys.stderr)
+            if force:
+                print("  Force mode: regenerating all summaries", file=sys.stderr)
 
-        result = generate_summaries(result, root, provider=provider, model=model, api_key=api_key)
+        result = generate_summaries(result, root, force=force, provider=provider, model=model, api_key=api_key)
 
         if args.verbose:
             summaries = result.get("summaries", {})

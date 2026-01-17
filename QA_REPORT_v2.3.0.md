@@ -15,6 +15,8 @@
 | Custom Templates | ✅ Pass | Jinja2 export and import |
 | Watch Mode | ✅ Pass | Auto-regeneration on file changes |
 | Doc Freshness Check | ✅ Pass | Stale/missing/ok detection |
+| LLM Summaries | ✅ Pass | Added `--force-summaries` flag |
+| Embeddings (GPU) | ✅ Pass | CUDA fallback to CPU on error |
 
 **Overall Grade: A**
 
@@ -224,6 +226,34 @@ codebase-index --init-mkdocs docs/  # Generate mkdocs.yml
 # With watch mode
 codebase-index . --generate-docs --watch
 ```
+
+---
+
+## Issues Found (Resolved)
+
+### Missing `--force-summaries` Flag
+
+**Severity:** Medium
+**Status:** ✅ Fixed
+
+**Problem:** The `--generate-summaries` feature skips functions that already have docstrings.
+
+**Solution:** Added `--force-summaries` CLI flag to regenerate LLM summaries for all functions regardless of existing docstrings.
+
+```bash
+codebase-index . --generate-summaries --force-summaries -o index.json
+```
+
+---
+
+### CUDA Index Out of Bounds with `unixcoder` Embedding Model
+
+**Severity:** Medium
+**Status:** ✅ Fixed
+
+**Problem:** When running `--build-embeddings` with the default `unixcoder` model on GPU, CUDA throws assertion errors.
+
+**Solution:** Added `_encode_with_fallback()` method in `semantic.py` that catches CUDA errors and automatically retries on CPU.
 
 ---
 
