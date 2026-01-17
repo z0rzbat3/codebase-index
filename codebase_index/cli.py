@@ -366,12 +366,36 @@ def main() -> None:
         if args.exclude_dirs:
             exclude.extend(args.exclude_dirs)
 
+        # Add directory exclusions from config (critical for --update to work correctly)
+        config_exclude = config.get("exclude", {})
+        config_dirs = config_exclude.get("directories", [])
+        if config_dirs:
+            exclude.extend(config_dirs)
+        config_patterns = config_exclude.get("patterns", [])
+        if config_patterns:
+            exclude.extend(config_patterns)
+
         exclude_extensions: set[str] = set()
         if args.exclude_ext:
             for ext in args.exclude_ext:
                 if not ext.startswith('.'):
                     ext = '.' + ext
                 exclude_extensions.add(ext.lower())
+
+        # Add extension exclusions from config
+        config_exts = config_exclude.get("extensions", [])
+        for ext in config_exts:
+            if not ext.startswith('.'):
+                ext = '.' + ext
+            exclude_extensions.add(ext.lower())
+
+        if args.verbose:
+            if config_dirs:
+                print(f"Config excluded directories: {config_dirs}", file=sys.stderr)
+            if config_patterns:
+                print(f"Config excluded patterns: {config_patterns}", file=sys.stderr)
+            if config_exts:
+                print(f"Config excluded extensions: {config_exts}", file=sys.stderr)
 
         update_result = incremental_update(
             root=root,

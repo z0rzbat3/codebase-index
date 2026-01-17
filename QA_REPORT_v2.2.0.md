@@ -418,20 +418,57 @@ Tested on `agent_factory.py`:
 
 | Issue | Severity | Status |
 |-------|----------|--------|
-| **`--tests-for` inconsistency** | **Medium** | **NEW** |
-| **LLM summaries not linked to functions** | **Medium** | **NEW** |
-| TypeScript symbol extraction | Medium | Known |
-| Incremental update over-scans | Low | Known |
-| Staleness shows index file | Low | Known |
-| Semantic search threshold | Low | NEW |
+| ~~`--tests-for` inconsistency~~ | ~~Medium~~ | **FIXED** ✅ |
+| ~~LLM summaries not linked~~ | ~~Medium~~ | **FIXED** ✅ |
+| ~~Semantic search threshold~~ | ~~Low~~ | **FIXED** ✅ (--search-threshold flag added) |
+| ~~Staleness shows index file~~ | ~~Low~~ | **FIXED** ✅ (filters out *_index.json) |
+| Incremental update over-scans | Low | ⚠️ Partial fix (see below) |
+| TypeScript symbol extraction | Medium | Remaining |
+
+**Incremental Update Details:**
+- ✅ Now filters by supported extensions (.py, .ts, .tsx, etc.)
+- ❌ Does NOT respect config `exclude.directories` during `--update`
+- Result: Adds 359 files from `.archive/`, `docs/third-party/` even with `--config` flag
+
+---
+
+### Fixes Verified ✅
+
+**1. `--tests-for` now works for all symbols:**
+```bash
+codebase-index --load index.json --tests-for "AgentFactory"
+# Result: 7 test files, 9 test functions (was empty before)
+```
+
+**2. `--summary-for` links summaries to functions:**
+```bash
+codebase-index --load index.json --summary-for "upgrade"
+# Result: 23 upgrade functions with their summaries displayed
+```
+
+**3. `--search-threshold` allows tuning semantic search:**
+```bash
+codebase-index --load index.json --search "Add user_id column" --search-threshold 0.2
+# Result: Finds migrations/versions/37995170b374_add_user_id_to_agents.py (score: 0.568)
+```
+
+**4. Semantic search uses summaries:**
+- Queries matching summary text now find the right functions
+- Score 0.568 when query matches summary closely
+
+**5. Staleness check filters index files:**
+```bash
+codebase-index --load index.json --check
+# Result: codebase_index.json no longer appears as "new file"
+```
 
 ---
 
 ### Final Assessment
 
-**Overall Grade: A-** (unchanged)
+**Overall Grade: A** (upgraded from A-)
 
-The new `--tests-for` inconsistency bug is worth fixing, but it doesn't fundamentally break the tool. The semantic search threshold behavior is expected - embeddings are approximate matches, not keyword search.
+All major issues reported have been fixed. The tool is now production-ready with comprehensive features for code navigation, test discovery, and semantic search.
 
 **Key Strengths:**
 1. Call graph queries are rock solid
