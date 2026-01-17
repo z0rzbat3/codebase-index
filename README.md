@@ -197,7 +197,11 @@ codebase_index/
     ├── schema_mapper.py  # Schema-to-endpoint mapping
     ├── coupling.py       # File coupling analysis
     ├── semantic.py       # Semantic search with embeddings
-    └── summaries.py      # LLM-generated code summaries
+    ├── summaries.py      # LLM-generated code summaries
+    ├── doc_generator.py  # Documentation generation
+    ├── templates.py      # Jinja2 template system
+    ├── watcher.py        # File watching for auto-regen
+    └── mkdocs.py         # MkDocs config generation
 ```
 
 ## Adding a New Language Parser
@@ -673,6 +677,38 @@ python -m codebase_index . --generate-summaries \
 # Summaries are cached by code hash - subsequent runs only generate for changed code
 ```
 
+### 13. Documentation Generation
+```bash
+# Generate markdown documentation from index
+python -m codebase_index --load index.json --generate-docs --output-dir docs/
+
+# Generate specific layers only
+python -m codebase_index --load index.json --generate-docs --doc-layers api,modules
+
+# Available layers:
+# - api: API endpoint reference (methods, paths, auth)
+# - modules: README for each package/directory
+# - reference: Symbol-level docs (functions, classes)
+# - architecture: Component diagrams and patterns
+
+# Check documentation freshness
+python -m codebase_index --load index.json --doc-diff docs/
+
+# Generate docs for a single symbol
+python -m codebase_index --load index.json --doc-for "UserService"
+
+# Watch mode: auto-regenerate on file changes
+python -m codebase_index . --generate-docs --watch
+
+# Custom templates (Jinja2)
+python -m codebase_index --init-templates ./templates  # Export defaults
+python -m codebase_index --load index.json --generate-docs --doc-template ./templates
+
+# Generate MkDocs config for web-based docs
+python -m codebase_index --init-mkdocs docs/
+mkdocs serve  # View at http://localhost:8000
+```
+
 ## Output Size Considerations
 
 | Codebase Size | Full Output | Summary Only |
@@ -691,6 +727,7 @@ python -m codebase_index . --generate-summaries \
 
 | Version | Features |
 |---------|----------|
+| 2.3 | **Documentation generation**: `--generate-docs`, `--doc-layers`, `--doc-diff`, `--watch`, `--init-mkdocs`, custom templates |
 | 2.2 | **Advanced features**: `--coupled-with`, `--update`, `--search`, `--build-embeddings`, `--generate-summaries` |
 | 2.1 | **Analysis queries**: `--check` staleness, `--tests-for`, `--impact`, `--schema` |
 | 2.0 | **Modular architecture**, plugin system for parsers, proper logging |
