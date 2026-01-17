@@ -100,17 +100,13 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "models": {
         "enabled": True,
         "patterns": [
-            # SQLAlchemy
+            # SQLAlchemy (marker-based is most reliable)
             {"marker": "__tablename__", "type": "sqlalchemy"},
-            {"base_class": "Base", "type": "sqlalchemy"},
             {"base_class": "DeclarativeBase", "type": "sqlalchemy"},
-            # Django
+            # Django (must be models.Model, not just Model which is too generic)
             {"base_class": "models.Model", "type": "django"},
-            {"base_class": "Model", "type": "django"},
             # Tortoise ORM
             {"base_class": "tortoise.Model", "type": "tortoise"},
-            # Prisma (TypeScript)
-            {"marker": "@prisma/client", "type": "prisma"},
         ],
     },
 
@@ -134,14 +130,22 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "auth": {
         "enabled": True,
         "patterns": [
-            # FastAPI
-            {"dependency": "Depends", "markers": ["get_current_user", "verify_token", "authenticate", "require_auth"]},
-            # Django
-            {"decorator": "login_required", "framework": "django"},
-            {"decorator": "permission_required", "framework": "django"},
-            {"class": "IsAuthenticated", "framework": "drf"},
-            # Flask
-            {"decorator": "login_required", "framework": "flask"},
+            # FastAPI / Starlette
+            {"regex": r"Depends\s*\(\s*get_current_user", "type": "get_current_user"},
+            {"regex": r"Depends\s*\(\s*require_auth", "type": "require_auth"},
+            {"regex": r"Depends\s*\(\s*auth_required", "type": "auth_required"},
+            {"regex": r"Depends\s*\(\s*get_current_active_user", "type": "get_current_active_user"},
+            {"regex": r"Depends\s*\(\s*verify_token", "type": "verify_token"},
+            # Decorator-based auth (Django, Flask, general)
+            {"regex": r"@require_auth", "type": "require_auth decorator"},
+            {"regex": r"@login_required", "type": "login_required decorator"},
+            {"regex": r"@authenticated", "type": "authenticated decorator"},
+            {"regex": r"@jwt_required", "type": "jwt_required decorator"},
+            {"regex": r"@permission_required", "type": "permission_required decorator"},
+            # Django REST Framework
+            {"regex": r"permission_classes\s*=.*IsAuthenticated", "type": "IsAuthenticated"},
+            # Bearer token
+            {"regex": r"Authorization.*Bearer", "type": "Bearer token"},
         ],
     },
 
@@ -392,6 +396,7 @@ schemas:
 # AUTHENTICATION / AUTHORIZATION
 # =============================================================================
 # Patterns to detect auth requirements on endpoints.
+# Each pattern has a 'regex' to match and a 'type' label for the auth method.
 #
 # Common patterns:
 # - FastAPI: Depends(get_current_user)
@@ -403,19 +408,20 @@ auth:
   enabled: true
   patterns:
     # FastAPI dependency injection
-    - dependency: Depends
-      markers:
-        - get_current_user
-        - verify_token
-        - authenticate
-        - require_auth
-        - get_current_active_user
+    - regex: "Depends\\\\s*\\\\(\\\\s*get_current_user"
+      type: get_current_user
+    - regex: "Depends\\\\s*\\\\(\\\\s*verify_token"
+      type: verify_token
 
-    # Django - uncomment if using Django
-    # - decorator: login_required
-    #   framework: django
-    # - decorator: permission_required
-    #   framework: django
+    # Decorator-based auth
+    - regex: "@login_required"
+      type: login_required decorator
+    - regex: "@require_auth"
+      type: require_auth decorator
+
+    # Django REST Framework - uncomment if using DRF
+    # - regex: "permission_classes\\\\s*=.*IsAuthenticated"
+    #   type: IsAuthenticated
 
 # =============================================================================
 # FILE CATEGORIZATION

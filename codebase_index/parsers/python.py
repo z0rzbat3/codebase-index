@@ -1,5 +1,7 @@
 """
 Python AST-based parser for codebase_index.
+
+Supports configurable patterns for routes, models, schemas via config.
 """
 
 from __future__ import annotations
@@ -11,7 +13,7 @@ import re
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from codebase_index.config import STDLIB_MODULES
+from codebase_index.config import STDLIB_MODULES, DEFAULT_CONFIG
 from codebase_index.parsers.base import BaseParser, ParserRegistry
 
 if TYPE_CHECKING:
@@ -20,27 +22,79 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+# Default route patterns (FastAPI/Starlette)
+DEFAULT_ROUTE_PATTERNS = [
+    {"regex": r"(router|app)\.(get|post|put|patch|delete|head|options)", "framework": "fastapi"},
+]
+
+# Default model patterns (marker-based is most reliable)
+DEFAULT_MODEL_PATTERNS = [
+    {"marker": "__tablename__", "type": "sqlalchemy"},
+    {"base_class": "DeclarativeBase", "type": "sqlalchemy"},
+]
+
+# Default schema patterns
+DEFAULT_SCHEMA_PATTERNS = [
+    {"base_class": "BaseModel", "type": "pydantic"},
+    {"base_class": "BaseSettings", "type": "pydantic"},
+]
+
+
 @ParserRegistry.register("python", [".py", ".pyw"])
 class PythonParser(BaseParser):
     """
     Python parser using the ast module for accurate extraction.
 
     Falls back to regex parsing for files with syntax errors.
+    Supports configurable patterns for routes, models, and schemas.
     """
 
     supports_fallback = True
 
-    def __init__(self, internal_prefixes: list[str] | None = None):
+    def __init__(self) -> None:
+        """Initialize the Python parser with default config."""
+        super().__init__()
+        # These will be populated by configure() or use defaults
+        self.internal_prefixes: list[str] = ["src", "app", "api", "lib", "core", "modules"]
+        self.route_patterns: list[dict[str, Any]] = DEFAULT_ROUTE_PATTERNS.copy()
+        self.model_patterns: list[dict[str, Any]] = DEFAULT_MODEL_PATTERNS.copy()
+        self.schema_patterns: list[dict[str, Any]] = DEFAULT_SCHEMA_PATTERNS.copy()
+
+    def configure(self, config: dict[str, Any]) -> None:
         """
-        Initialize the Python parser.
+        Configure the parser with patterns from config.
 
         Args:
-            internal_prefixes: List of module prefixes considered internal
-                to the project. If None, uses common defaults.
+            config: Configuration dictionary with routes, models, schemas sections.
         """
-        self.internal_prefixes = internal_prefixes or [
-            "src", "app", "api", "lib", "core", "modules", "db", "auth", "agents"
-        ]
+        super().configure(config)
+
+        # Import classification
+        imports_config = config.get("imports", {})
+        if imports_config.get("internal_prefixes"):
+            self.internal_prefixes = imports_config["internal_prefixes"]
+
+        # Route detection patterns
+        routes_config = config.get("routes", {})
+        if routes_config.get("enabled", True) and routes_config.get("patterns"):
+            self.route_patterns = routes_config["patterns"]
+
+        # Model detection patterns
+        models_config = config.get("models", {})
+        if models_config.get("enabled", True) and models_config.get("patterns"):
+            self.model_patterns = models_config["patterns"]
+
+        # Schema detection patterns
+        schemas_config = config.get("schemas", {})
+        if schemas_config.get("enabled", True) and schemas_config.get("patterns"):
+            self.schema_patterns = schemas_config["patterns"]
+
+        logger.debug(
+            "PythonParser configured: %d route patterns, %d model patterns, %d schema patterns",
+            len(self.route_patterns),
+            len(self.model_patterns),
+            len(self.schema_patterns),
+        )
 
     def scan(self, filepath: Path) -> dict[str, Any]:
         """
@@ -50,7 +104,7 @@ class PythonParser(BaseParser):
             filepath: Path to the Python file.
 
         Returns:
-            Dictionary with classes, functions, imports, routes, etc.
+            Dictionary with classes, functions, imports, routes, models, schemas.
         """
         try:
             with open(filepath, "r", encoding="utf-8") as f:
@@ -67,6 +121,10 @@ class PythonParser(BaseParser):
             "classes": [],
             "functions": [],
             "imports": {"internal": [], "external": []},
+            "routes": [],           # Generic routes (config-driven)
+            "models": [],           # ORM models (config-driven)
+            "schemas": [],          # Validation schemas (config-driven)
+            # Legacy keys for backwards compatibility
             "fastapi_routes": [],
             "sqlalchemy_tables": [],
             "pydantic_models": [],
@@ -100,9 +158,72 @@ class PythonParser(BaseParser):
             "methods": [],
         }
 
-        # Check for Pydantic model
-        if any("BaseModel" in str(b) for b in class_info["bases"]):
-            result["pydantic_models"].append(node.name)
+        # Check for schema patterns (Pydantic, DRF serializers, etc.)
+        is_schema = False
+        for pattern in self.schema_patterns:
+            base_class = pattern.get("base_class")
+            if base_class and self._matches_base_class(class_info["bases"], base_class):
+                schema_info = {
+                    "name": node.name,
+                    "line": node.lineno,
+                    "type": pattern.get("type", "unknown"),
+                    "base": base_class,
+                }
+                result["schemas"].append(schema_info)
+                # Legacy support
+                if pattern.get("type") == "pydantic":
+                    result["pydantic_models"].append(node.name)
+                is_schema = True
+                break
+
+        # Check for model patterns (SQLAlchemy, Django ORM, etc.)
+        # Skip if already identified as a schema (e.g., Pydantic models are not DB models)
+        if not is_schema:
+            model_found = False
+            for pattern in self.model_patterns:
+                if model_found:
+                    break
+
+                # Check base class pattern
+                base_class = pattern.get("base_class")
+                if base_class and self._matches_base_class(class_info["bases"], base_class):
+                    model_info = {
+                        "class": node.name,
+                        "line": node.lineno,
+                        "type": pattern.get("type", "unknown"),
+                    }
+                    result["models"].append(model_info)
+                    model_found = True
+                    continue
+
+                # Check marker pattern (e.g., __tablename__)
+                marker = pattern.get("marker")
+                if marker:
+                    for item in node.body:
+                        if isinstance(item, ast.Assign):
+                            for target in item.targets:
+                                if isinstance(target, ast.Name) and target.id == marker:
+                                    table_name = None
+                                    if isinstance(item.value, ast.Constant):
+                                        table_name = item.value.value
+                                    model_info = {
+                                        "class": node.name,
+                                        "line": node.lineno,
+                                        "type": pattern.get("type", "unknown"),
+                                    }
+                                    if table_name:
+                                        model_info["table"] = table_name
+                                    result["models"].append(model_info)
+                                    # Legacy support
+                                    if pattern.get("type") == "sqlalchemy" and table_name:
+                                        result["sqlalchemy_tables"].append({
+                                            "class": node.name,
+                                            "table": table_name,
+                                        })
+                                    model_found = True
+                                    break
+                        if model_found:
+                            break
 
         # Process methods
         for item in node.body:
@@ -119,17 +240,6 @@ class PythonParser(BaseParser):
                 class_info["methods"].append(method_info)
 
         result["classes"].append(class_info)
-
-        # Check for SQLAlchemy __tablename__
-        for item in node.body:
-            if isinstance(item, ast.Assign):
-                for target in item.targets:
-                    if isinstance(target, ast.Name) and target.id == "__tablename__":
-                        if isinstance(item.value, ast.Constant):
-                            result["sqlalchemy_tables"].append({
-                                "class": node.name,
-                                "table": item.value.value,
-                            })
 
     def _process_function(
         self,
@@ -150,16 +260,61 @@ class PythonParser(BaseParser):
         }
         result["functions"].append(func_info)
 
-        # Check for FastAPI route decorators
+        # Check for route decorators using config patterns
         for dec in node.decorator_list:
             dec_name = self._get_decorator_name(dec)
-            if dec_name and re.match(
-                r"(router|app)\.(get|post|put|patch|delete|head|options)",
-                dec_name,
-            ):
-                route_info = self._extract_route_info(dec, node.name, node.lineno)
-                if route_info:
-                    result["fastapi_routes"].append(route_info)
+            if not dec_name:
+                continue
+
+            for pattern in self.route_patterns:
+                regex = pattern.get("regex")
+                if regex:
+                    match = re.match(regex, dec_name)
+                    if match:
+                        route_info = self._extract_route_info(
+                            dec, node.name, node.lineno, pattern, match
+                        )
+                        if route_info:
+                            result["routes"].append(route_info)
+                            # Legacy support for fastapi_routes
+                            if pattern.get("framework") in ("fastapi", "starlette"):
+                                result["fastapi_routes"].append(route_info)
+                        break
+
+    def _extract_route_info(
+        self,
+        decorator: ast.expr,
+        func_name: str,
+        line: int,
+        pattern: dict[str, Any],
+        match: re.Match,
+    ) -> dict[str, Any] | None:
+        """Extract route information from a decorator."""
+        if not isinstance(decorator, ast.Call):
+            return None
+
+        # Try to extract HTTP method from regex groups
+        method = "GET"
+        if match.lastindex and match.lastindex >= 2:
+            method = match.group(2).upper()
+        elif match.lastindex and match.lastindex >= 1:
+            # Check if the captured group looks like an HTTP method
+            captured = match.group(1)
+            if captured.lower() in ("get", "post", "put", "patch", "delete", "head", "options"):
+                method = captured.upper()
+
+        # Extract path from first argument
+        path = None
+        if decorator.args and isinstance(decorator.args[0], ast.Constant):
+            path = decorator.args[0].value
+
+        return {
+            "method": method,
+            "path": path,
+            "handler": func_name,
+            "line": line,
+            "framework": pattern.get("framework", "unknown"),
+        }
 
     def _get_name(self, node: ast.expr) -> str:
         """Get name from AST node."""
@@ -180,6 +335,28 @@ class PythonParser(BaseParser):
         elif isinstance(node, ast.Call):
             return self._get_decorator_name(node.func)
         return None
+
+    def _matches_base_class(self, bases: list[str], pattern: str) -> bool:
+        """
+        Check if any base class matches the pattern.
+
+        Uses exact matching for simple names, or suffix matching for dotted names.
+        E.g., pattern "Base" matches "Base" but not "BaseModel".
+        Pattern "models.Model" matches "models.Model" or "django.db.models.Model".
+        """
+        for base in bases:
+            # Exact match
+            if base == pattern:
+                return True
+            # Suffix match for dotted patterns (e.g., "models.Model" matches "django.db.models.Model")
+            if "." in pattern and base.endswith("." + pattern.split(".")[-1]):
+                # Check if the pattern's components match the end of the base
+                if base.endswith(pattern) or base == pattern.split(".")[-1]:
+                    return True
+            # For simple patterns like "Model", also check the last component of dotted bases
+            if "." not in pattern and base.split(".")[-1] == pattern:
+                return True
+        return False
 
     def _extract_signature(self, node: ast.FunctionDef | ast.AsyncFunctionDef) -> dict[str, Any]:
         """Extract function signature (parameters and return type)."""
@@ -330,40 +507,6 @@ class PythonParser(BaseParser):
             logger.debug("Could not hash function body: %s", e)
             return None
 
-    def _extract_route_info(
-        self,
-        decorator: ast.expr,
-        func_name: str,
-        line: int,
-    ) -> dict[str, Any] | None:
-        """Extract FastAPI route information from decorator."""
-        if not isinstance(decorator, ast.Call):
-            return None
-
-        dec_name = self._get_decorator_name(decorator)
-        if not dec_name:
-            return None
-
-        match = re.match(
-            r"(router|app)\.(get|post|put|patch|delete|head|options)",
-            dec_name,
-        )
-        if not match:
-            return None
-
-        method = match.group(2).upper()
-        path = None
-
-        if decorator.args and isinstance(decorator.args[0], ast.Constant):
-            path = decorator.args[0].value
-
-        return {
-            "method": method,
-            "path": path,
-            "handler": func_name,
-            "line": line,
-        }
-
     def _categorize_import(self, module: str, imports: dict[str, list[str]]) -> None:
         """Categorize import as internal or external."""
         root_module = module.split(".")[0]
@@ -393,6 +536,9 @@ class PythonParser(BaseParser):
             "classes": [],
             "functions": [],
             "imports": {"internal": [], "external": []},
+            "routes": [],
+            "models": [],
+            "schemas": [],
             "fastapi_routes": [],
             "sqlalchemy_tables": [],
             "pydantic_models": [],
@@ -401,7 +547,8 @@ class PythonParser(BaseParser):
 
         try:
             with open(filepath, "r", encoding="utf-8") as f:
-                lines = f.readlines()
+                content = f.read()
+                lines = content.split("\n")
         except (OSError, IOError) as e:
             logger.warning("Could not read %s: %s", filepath, e)
             return result
@@ -421,21 +568,50 @@ class PythonParser(BaseParser):
                     "async": bool(match.group(1)),
                 })
 
-            # Routes
-            match = re.match(r'^@(router|app)\.(get|post|put|patch|delete)\(["\']([^"\']+)', line)
-            if match:
-                result["fastapi_routes"].append({
-                    "method": match.group(2).upper(),
-                    "path": match.group(3),
-                    "line": i,
-                })
+            # Routes - use config patterns
+            for pattern in self.route_patterns:
+                regex = pattern.get("regex")
+                if regex:
+                    route_match = re.search(rf'@{regex}\s*\(\s*["\']([^"\']+)["\']', line)
+                    if route_match:
+                        method = "GET"
+                        if route_match.lastindex and route_match.lastindex >= 1:
+                            # Extract method from decorator name
+                            dec_match = re.search(regex, line)
+                            if dec_match and dec_match.lastindex and dec_match.lastindex >= 2:
+                                method = dec_match.group(2).upper()
+                        result["routes"].append({
+                            "method": method,
+                            "path": route_match.group(1),
+                            "line": i,
+                            "framework": pattern.get("framework", "unknown"),
+                        })
+                        # Legacy support
+                        if pattern.get("framework") in ("fastapi", "starlette"):
+                            result["fastapi_routes"].append({
+                                "method": method,
+                                "path": route_match.group(1),
+                                "line": i,
+                            })
+                        break
 
-            # Tables
-            match = re.search(r'__tablename__\s*=\s*["\'](\w+)["\']', line)
-            if match:
-                result["sqlalchemy_tables"].append({
-                    "table": match.group(1),
-                    "line": i,
-                })
+            # Models - check for marker patterns
+            for pattern in self.model_patterns:
+                marker = pattern.get("marker")
+                if marker:
+                    marker_match = re.search(rf'{marker}\s*=\s*["\'](\w+)["\']', line)
+                    if marker_match:
+                        result["models"].append({
+                            "table": marker_match.group(1),
+                            "line": i,
+                            "type": pattern.get("type", "unknown"),
+                        })
+                        # Legacy support
+                        if pattern.get("type") == "sqlalchemy":
+                            result["sqlalchemy_tables"].append({
+                                "table": marker_match.group(1),
+                                "line": i,
+                            })
+                        break
 
         return result

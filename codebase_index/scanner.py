@@ -90,6 +90,7 @@ class CodebaseScanner:
         # Initialize analyzers
         self.import_aggregator = ImportAggregator()
         self.auth_scanner = AuthScanner()
+        self.auth_scanner.configure(self.config)  # Pass auth patterns from config
         self.test_mapper = TestCoverageMapper(self.root)
         complexity_config = self.config.get("complexity", {})
         self.complexity_analyzer = ComplexityAnalyzer(
@@ -167,6 +168,7 @@ class CodebaseScanner:
             },
             "files": [],
             "api_endpoints": [],
+            "schemas": [],
             "database": {"tables": []},
             "docker": {"services": [], "networks": [], "volumes": []},
             "dependencies": {},
@@ -231,8 +233,8 @@ class CodebaseScanner:
         if docker_parser and docker_lang:
             return self._build_file_info(filepath, rel_path, docker_lang, docker_parser)
 
-        # Get parser from registry
-        parser, language = ParserRegistry.get_parser(filepath)
+        # Get parser from registry (pass config for framework-specific patterns)
+        parser, language = ParserRegistry.get_parser(filepath, self.config)
         if not parser:
             return None
 
@@ -333,11 +335,27 @@ class CodebaseScanner:
                     "file": file_path,
                 })
 
-        # Process database tables
+        # Process database tables (legacy SQLAlchemy key)
         if exports.get("sqlalchemy_tables"):
             for table in exports["sqlalchemy_tables"]:
                 result["database"]["tables"].append({
                     **table,
+                    "file": file_path,
+                })
+
+        # Process generic models (config-driven, e.g., Django ORM)
+        if exports.get("models"):
+            for model in exports["models"]:
+                result["database"]["tables"].append({
+                    **model,
+                    "file": file_path,
+                })
+
+        # Aggregate schemas (Pydantic, DRF serializers, etc.)
+        if exports.get("schemas"):
+            for schema in exports["schemas"]:
+                result["schemas"].append({
+                    **schema,
                     "file": file_path,
                 })
 
@@ -502,6 +520,8 @@ class CodebaseScanner:
         summary["auth_required_endpoints"] = sum(
             1 for ep in result["api_endpoints"] if ep.get("auth_required")
         )
+        summary["schemas_count"] = len(result["schemas"])
+        summary["database_tables_count"] = len(result["database"]["tables"])
         summary["test_coverage_percent"] = result["test_coverage"].get(
             "coverage_percentage", 0
         )

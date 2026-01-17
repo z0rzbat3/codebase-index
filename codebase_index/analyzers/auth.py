@@ -2,6 +2,7 @@
 Auth requirements scanner for codebase_index.
 
 Scans for authentication requirements per endpoint.
+Supports configurable auth patterns via config.
 """
 
 from __future__ import annotations
@@ -17,21 +18,49 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-class AuthScanner:
-    """Scan for authentication requirements per endpoint."""
+# Default auth patterns (FastAPI/general patterns)
+DEFAULT_AUTH_PATTERNS = [
+    {"regex": r"Depends\s*\(\s*get_current_user", "type": "get_current_user"},
+    {"regex": r"Depends\s*\(\s*require_auth", "type": "require_auth"},
+    {"regex": r"Depends\s*\(\s*auth_required", "type": "auth_required"},
+    {"regex": r"Depends\s*\(\s*get_current_active_user", "type": "get_current_active_user"},
+    {"regex": r"@require_auth", "type": "require_auth decorator"},
+    {"regex": r"@login_required", "type": "login_required decorator"},
+    {"regex": r"@authenticated", "type": "authenticated decorator"},
+    {"regex": r"@jwt_required", "type": "jwt_required decorator"},
+    {"regex": r"@permission_required", "type": "permission_required decorator"},
+    {"regex": r"Authorization.*Bearer", "type": "Bearer token"},
+]
 
-    # Common auth patterns
-    AUTH_PATTERNS = [
-        (r'Depends\s*\(\s*get_current_user', "get_current_user"),
-        (r'Depends\s*\(\s*require_auth', "require_auth"),
-        (r'Depends\s*\(\s*auth_required', "auth_required"),
-        (r'Depends\s*\(\s*get_current_active_user', "get_current_active_user"),
-        (r'@require_auth', "require_auth decorator"),
-        (r'@login_required', "login_required decorator"),
-        (r'@authenticated', "authenticated decorator"),
-        (r'@jwt_required', "jwt_required decorator"),
-        (r'Authorization.*Bearer', "Bearer token"),
-    ]
+
+class AuthScanner:
+    """
+    Scan for authentication requirements per endpoint.
+
+    Supports configurable auth patterns. Falls back to FastAPI defaults.
+    """
+
+    def __init__(self) -> None:
+        """Initialize with default auth patterns."""
+        self.auth_patterns = DEFAULT_AUTH_PATTERNS.copy()
+
+    def configure(self, config: dict[str, Any]) -> None:
+        """
+        Configure the scanner with auth patterns from config.
+
+        Args:
+            config: Configuration dictionary with optional 'auth' section.
+        """
+        auth_config = config.get("auth", {})
+
+        if auth_config.get("patterns"):
+            # Use configured patterns
+            self.auth_patterns = auth_config["patterns"]
+            logger.debug("AuthScanner using %d config patterns", len(self.auth_patterns))
+        else:
+            # Use defaults
+            self.auth_patterns = DEFAULT_AUTH_PATTERNS.copy()
+            logger.debug("AuthScanner using default patterns")
 
     def scan_file(
         self,
@@ -93,8 +122,13 @@ class AuthScanner:
 
         context = "\n".join(lines[start:end])
 
-        for pattern, auth_type in self.AUTH_PATTERNS:
-            if re.search(pattern, context, re.IGNORECASE):
-                return auth_type
+        for pattern_info in self.auth_patterns:
+            regex = pattern_info.get("regex", "")
+            auth_type = pattern_info.get("type", "unknown")
+            try:
+                if re.search(regex, context, re.IGNORECASE):
+                    return auth_type
+            except re.error as e:
+                logger.warning("Invalid auth regex %r: %s", regex, e)
 
         return None

@@ -1,5 +1,7 @@
 """
 TypeScript/React regex-based parser for codebase_index.
+
+Supports configurable internal import aliases via config.
 """
 
 from __future__ import annotations
@@ -23,7 +25,36 @@ class TypeScriptParser(BaseParser):
     TypeScript/React parser using regex patterns.
 
     Extracts components, hooks, functions, types, interfaces, and imports.
+    Supports configurable internal import aliases.
     """
+
+    def __init__(self) -> None:
+        """Initialize with default config."""
+        super().__init__()
+        # Internal import patterns (relative imports, aliases)
+        self.internal_patterns: list[str] = [".", "@/", "~/"]
+
+    def configure(self, config: dict[str, Any]) -> None:
+        """
+        Configure the parser.
+
+        Args:
+            config: Configuration dictionary.
+        """
+        super().configure(config)
+
+        # Check for custom internal import prefixes
+        imports_config = config.get("imports", {})
+        if imports_config.get("internal_prefixes"):
+            # Add TypeScript-specific prefixes
+            prefixes = imports_config["internal_prefixes"]
+            self.internal_patterns = [".", "@/", "~/"]
+            # Add any custom prefixes that look like aliases
+            for prefix in prefixes:
+                if prefix.startswith("@") or prefix.startswith("~"):
+                    self.internal_patterns.append(prefix)
+
+        logger.debug("TypeScriptParser configured: internal patterns = %s", self.internal_patterns)
 
     def scan(self, filepath: Path) -> dict[str, Any]:
         """
@@ -43,6 +74,7 @@ class TypeScriptParser(BaseParser):
             "interfaces": [],
             "imports": {"internal": [], "external": []},
             "api_calls": [],
+            "routes": [],  # Express/Next.js routes if detected
         }
 
         try:
@@ -103,6 +135,20 @@ class TypeScriptParser(BaseParser):
             self._categorize_import(module, result["imports"])
             return
 
+        # Express routes: app.get('/path', ...) or router.get('/path', ...)
+        match = re.search(
+            r"(?:app|router)\.(get|post|put|patch|delete)\s*\(\s*['\"]([^'\"]+)['\"]",
+            line,
+        )
+        if match:
+            result["routes"].append({
+                "method": match.group(1).upper(),
+                "path": match.group(2),
+                "line": line_num,
+                "framework": "express",
+            })
+            return
+
         # API calls - fetch
         match = re.search(r"fetch\(['\"]([^'\"]+)['\"]", line)
         if match:
@@ -127,8 +173,12 @@ class TypeScriptParser(BaseParser):
         imports: dict[str, list[str]],
     ) -> None:
         """Categorize import as internal or external."""
-        if module.startswith(".") or module.startswith("@/"):
-            # Relative imports or alias imports are internal
+        # Check if it matches any internal pattern
+        is_internal = any(
+            module.startswith(pattern) for pattern in self.internal_patterns
+        )
+
+        if is_internal:
             if module not in imports["internal"]:
                 imports["internal"].append(module)
         else:

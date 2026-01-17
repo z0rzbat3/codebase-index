@@ -17,6 +17,7 @@ Example:
 from __future__ import annotations
 
 import logging
+import re
 from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import TYPE_CHECKING, ClassVar
@@ -31,12 +32,13 @@ class ParserRegistry:
     """
     Registry for language parsers.
 
-    Manages parser instances and their file extension mappings.
-    Supports dynamic registration of custom parsers.
+    Manages parser classes and their file extension mappings.
+    Supports dynamic registration of custom parsers and config injection.
     """
 
-    _parsers: ClassVar[dict[str, "BaseParser"]] = {}
+    _parser_classes: ClassVar[dict[str, Type["BaseParser"]]] = {}
     _extension_map: ClassVar[dict[str, str]] = {}  # .ext -> language name
+    _cached_parsers: ClassVar[dict[tuple[str, int], "BaseParser"]] = {}  # (lang, config_id) -> instance
 
     @classmethod
     def register(
@@ -77,10 +79,9 @@ class ParserRegistry:
         Args:
             language: Language name.
             extensions: List of file extensions.
-            parser_class: Parser class (will be instantiated).
+            parser_class: Parser class (stored, instantiated on demand with config).
         """
-        parser_instance = parser_class()
-        cls._parsers[language] = parser_instance
+        cls._parser_classes[language] = parser_class
 
         for ext in extensions:
             ext_lower = ext.lower()
@@ -91,12 +92,17 @@ class ParserRegistry:
         logger.debug("Registered parser for %s: %s", language, extensions)
 
     @classmethod
-    def get_parser(cls, filepath: Path) -> tuple["BaseParser" | None, str | None]:
+    def get_parser(
+        cls,
+        filepath: Path,
+        config: dict[str, Any] | None = None,
+    ) -> tuple["BaseParser" | None, str | None]:
         """
-        Get the appropriate parser for a file.
+        Get the appropriate parser for a file, configured with the given config.
 
         Args:
             filepath: Path to the file.
+            config: Configuration dictionary to pass to the parser.
 
         Returns:
             Tuple of (parser instance, language name), or (None, None) if no parser.
@@ -105,27 +111,56 @@ class ParserRegistry:
         language = cls._extension_map.get(suffix)
 
         if language:
-            return cls._parsers.get(language), language
+            parser = cls._get_configured_parser(language, config)
+            return parser, language
 
         return None, None
 
     @classmethod
-    def get_parser_for_language(cls, language: str) -> "BaseParser" | None:
+    def _get_configured_parser(
+        cls,
+        language: str,
+        config: dict[str, Any] | None,
+    ) -> "BaseParser" | None:
+        """Get or create a parser instance with the given config."""
+        parser_class = cls._parser_classes.get(language)
+        if not parser_class:
+            return None
+
+        # Use config id for caching (None config = id 0)
+        config_id = id(config) if config else 0
+        cache_key = (language, config_id)
+
+        if cache_key not in cls._cached_parsers:
+            parser = parser_class()
+            if config:
+                parser.configure(config)
+            cls._cached_parsers[cache_key] = parser
+
+        return cls._cached_parsers[cache_key]
+
+    @classmethod
+    def get_parser_for_language(
+        cls,
+        language: str,
+        config: dict[str, Any] | None = None,
+    ) -> "BaseParser" | None:
         """
         Get parser by language name.
 
         Args:
             language: Language name.
+            config: Configuration dictionary.
 
         Returns:
             Parser instance or None.
         """
-        return cls._parsers.get(language)
+        return cls._get_configured_parser(language, config)
 
     @classmethod
     def list_languages(cls) -> list[str]:
         """Get list of registered languages."""
-        return list(cls._parsers.keys())
+        return list(cls._parser_classes.keys())
 
     @classmethod
     def list_extensions(cls) -> dict[str, str]:
@@ -135,8 +170,9 @@ class ParserRegistry:
     @classmethod
     def clear(cls) -> None:
         """Clear all registered parsers. Useful for testing."""
-        cls._parsers.clear()
+        cls._parser_classes.clear()
         cls._extension_map.clear()
+        cls._cached_parsers.clear()
 
 
 class BaseParser(ABC):
@@ -156,6 +192,21 @@ class BaseParser(ABC):
 
     # Subclasses can set this to provide a regex fallback
     supports_fallback: bool = False
+
+    def __init__(self) -> None:
+        """Initialize the parser with empty config."""
+        self.config: dict[str, Any] = {}
+
+    def configure(self, config: dict[str, Any]) -> None:
+        """
+        Configure the parser with the given config.
+
+        Subclasses can override to extract specific config values.
+
+        Args:
+            config: Configuration dictionary.
+        """
+        self.config = config
 
     @abstractmethod
     def scan(self, filepath: Path) -> dict[str, Any]:
@@ -201,3 +252,33 @@ class BaseParser(ABC):
             "functions": [],
             "imports": {"internal": [], "external": []},
         }
+
+    def _match_patterns(
+        self,
+        text: str,
+        patterns: list[dict[str, Any]],
+        pattern_key: str = "regex",
+    ) -> list[dict[str, Any]]:
+        """
+        Match text against a list of config patterns.
+
+        Helper method for subclasses to use config-driven pattern matching.
+
+        Args:
+            text: Text to match against.
+            patterns: List of pattern dicts from config.
+            pattern_key: Key in pattern dict containing the regex.
+
+        Returns:
+            List of matching pattern dicts.
+        """
+        matches = []
+        for pattern in patterns:
+            regex = pattern.get(pattern_key)
+            if regex:
+                try:
+                    if re.search(regex, text):
+                        matches.append(pattern)
+                except re.error as e:
+                    logger.warning("Invalid regex pattern %r: %s", regex, e)
+        return matches
