@@ -42,7 +42,7 @@ PROVIDERS = {
     "openrouter": {
         "base_url": "https://openrouter.ai/api/v1",
         "env_key": "OPENROUTER_API_KEY",
-        "default_model": "anthropic/claude-3-haiku",
+        "default_model": "qwen/qwen3-coder-30b-a3b-instruct",
         "headers": lambda key: {
             "Authorization": f"Bearer {key}",
             "HTTP-Referer": "https://github.com/codebase-index",
