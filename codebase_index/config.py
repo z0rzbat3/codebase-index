@@ -127,25 +127,36 @@ DEFAULT_CONFIG: dict[str, Any] = {
     },
 
     # Authentication / Authorization detection
+    # NEW FORMAT: Separate parameter patterns (checked in function signature)
+    # from decorator patterns (checked above function definition)
+    # This prevents false positives from broad context matching
     "auth": {
         "enabled": True,
-        "patterns": [
-            # FastAPI / Starlette
-            {"regex": r"Depends\s*\(\s*get_current_user", "type": "get_current_user"},
-            {"regex": r"Depends\s*\(\s*require_auth", "type": "require_auth"},
-            {"regex": r"Depends\s*\(\s*auth_required", "type": "auth_required"},
-            {"regex": r"Depends\s*\(\s*get_current_active_user", "type": "get_current_active_user"},
-            {"regex": r"Depends\s*\(\s*verify_token", "type": "verify_token"},
-            # Decorator-based auth (Django, Flask, general)
-            {"regex": r"@require_auth", "type": "require_auth decorator"},
-            {"regex": r"@login_required", "type": "login_required decorator"},
-            {"regex": r"@authenticated", "type": "authenticated decorator"},
-            {"regex": r"@jwt_required", "type": "jwt_required decorator"},
-            {"regex": r"@permission_required", "type": "permission_required decorator"},
-            # Django REST Framework
-            {"regex": r"permission_classes\s*=.*IsAuthenticated", "type": "IsAuthenticated"},
-            # Bearer token
-            {"regex": r"Authorization.*Bearer", "type": "Bearer token"},
+        # Patterns checked against function PARAMETERS/SIGNATURE only
+        "parameters": [
+            # FastAPI Depends() patterns
+            r"Depends\s*\(\s*get_current_user",
+            r"Depends\s*\(\s*get_current_active_user",
+            r"Depends\s*\(\s*require_auth",
+            r"Depends\s*\(\s*auth_required",
+            r"Depends\s*\(\s*verify_token",
+            r"Depends\s*\(\s*oauth2_scheme",
+            r"Depends\s*\(\s*get_api_key",
+            # Type hint patterns
+            r"current_user\s*:\s*\w+",
+            r"authenticated_user",
+        ],
+        # Patterns checked against DECORATORS only (lines starting with @)
+        "decorators": [
+            r"@login_required",
+            r"@require_auth",
+            r"@authenticated",
+            r"@jwt_required",
+            r"@permission_required",
+            r"@auth_required",
+            r"@token_required",
+            r"@api_key_required",
+            r"@permission_classes",
         ],
     },
 
@@ -303,11 +314,37 @@ def get_config_template() -> str:
 # =============================================================================
 # This config file customizes how codebase_index scans your project.
 #
-# INSTRUCTIONS FOR LLMs (Claude, GPT, etc.):
-# 1. Analyze the user's codebase structure (frameworks, file organization)
-# 2. Modify the patterns below to match their stack
-# 3. Remove or disable sections that don't apply
-# 4. Add new patterns for any custom conventions
+# =============================================================================
+# INSTRUCTIONS FOR LLM AGENTS (Claude Code, Cursor, etc.)
+# =============================================================================
+#
+# BEFORE creating/editing this config:
+#   1. Run: codebase-index . --summary --no-hash
+#   2. Analyze the output to understand the project structure
+#   3. Identify the framework (FastAPI, Django, Flask, Express, etc.)
+#   4. Note any unusual patterns or conventions
+#
+# WHEN customizing this config:
+#   - Only modify sections relevant to the detected framework
+#   - Use regex patterns (escape backslashes: \\\\ in YAML)
+#   - Test incrementally: change one thing, re-run, verify
+#   - Use --verbose to see which patterns are matching
+#
+# AFTER creating the config:
+#   codebase-index . --config this_file.yaml -o index.json -v
+#
+# =============================================================================
+# DISCLAIMER: LIMITATIONS OF STATIC ANALYSIS
+# =============================================================================
+# This tool uses AST parsing and regex patterns. It MAY:
+#
+#   MISS: Dynamic routes, metaprogramming, runtime code generation,
+#         decorators from unusual libraries, complex inheritance
+#
+#   FALSE POSITIVE: Patterns that look like routes/models but aren't,
+#                   test fixtures that mimic production patterns
+#
+# Always verify critical findings. Customize patterns for your codebase.
 # =============================================================================
 
 project:
@@ -403,32 +440,46 @@ schemas:
 # AUTHENTICATION / AUTHORIZATION
 # =============================================================================
 # Patterns to detect auth requirements on endpoints.
-# Each pattern has a 'regex' to match and a 'type' label for the auth method.
 #
-# Common patterns:
-# - FastAPI: Depends(get_current_user)
-# - Django: @login_required, @permission_required
-# - Flask: @login_required
-# - Express: middleware like isAuthenticated
+# IMPORTANT: Auth detection is PRECISE - it only checks:
+# 1. Function SIGNATURE (parameters) - for dependency injection patterns
+# 2. Function DECORATORS - for decorator-based auth
+#
+# This prevents false positives from imports or nearby code.
+#
+# Format:
+#   parameters: List of regex patterns checked against function signature
+#   decorators: List of regex patterns checked against @ decorators
 # =============================================================================
 auth:
   enabled: true
-  patterns:
+
+  # Patterns matched against function PARAMETERS only
+  # Example: def endpoint(current_user: User = Depends(get_current_user))
+  parameters:
     # FastAPI dependency injection
-    - regex: "Depends\\\\s*\\\\(\\\\s*get_current_user"
-      type: get_current_user
-    - regex: "Depends\\\\s*\\\\(\\\\s*verify_token"
-      type: verify_token
+    - "Depends\\\\s*\\\\(\\\\s*get_current_user"
+    - "Depends\\\\s*\\\\(\\\\s*get_current_active_user"
+    - "Depends\\\\s*\\\\(\\\\s*verify_token"
+    - "Depends\\\\s*\\\\(\\\\s*require_auth"
+    - "Depends\\\\s*\\\\(\\\\s*oauth2_scheme"
+    # Type hint patterns
+    - "current_user\\\\s*:\\\\s*\\\\w+"
+    # Add your custom auth dependency patterns here
+    # - "Depends\\\\s*\\\\(\\\\s*my_custom_auth"
 
-    # Decorator-based auth
-    - regex: "@login_required"
-      type: login_required decorator
-    - regex: "@require_auth"
-      type: require_auth decorator
-
-    # Django REST Framework - uncomment if using DRF
-    # - regex: "permission_classes\\\\s*=.*IsAuthenticated"
-    #   type: IsAuthenticated
+  # Patterns matched against DECORATORS only (lines starting with @)
+  # Example: @login_required
+  decorators:
+    - "@login_required"
+    - "@require_auth"
+    - "@authenticated"
+    - "@jwt_required"
+    - "@permission_required"
+    - "@token_required"
+    # Django REST Framework
+    # - "@permission_classes"
+    # Add your custom auth decorator patterns here
 
 # =============================================================================
 # FILE CATEGORIZATION

@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "codebase-index"
-version = "2.0.0"
+version = "2.2.0"
 description = "Generate comprehensive, LLM-friendly inventories of your codebase"
 readme = "README.md"
 license = "MIT"
@@ -41,13 +41,18 @@ dependencies = []
 
 [project.optional-dependencies]
 yaml = ["pyyaml>=6.0"]
+semantic = [
+    "sentence-transformers>=2.2.0",
+    "numpy>=1.20.0",
+]
+summaries = ["httpx>=0.24.0"]
 dev = [
     "pytest>=7.0",
     "pytest-cov>=4.0",
     "mypy>=1.0",
     "ruff>=0.1.0",
 ]
-all = ["codebase-index[yaml,dev]"]
+all = ["codebase-index[yaml,semantic,summaries,dev]"]
 
 [project.scripts]
 codebase-index = "codebase_index.cli:main"

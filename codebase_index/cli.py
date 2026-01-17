@@ -23,6 +23,11 @@ from codebase_index.config import (
 )
 from codebase_index.scanner import CodebaseScanner
 from codebase_index.call_graph import cg_query_function, cg_query_file, cg_query_callers
+from codebase_index.analyzers.staleness import StalenessChecker
+from codebase_index.analyzers.test_mapper import TestMapper
+from codebase_index.analyzers.impact import ImpactAnalyzer
+from codebase_index.analyzers.schema_mapper import SchemaMapper
+from codebase_index.analyzers.coupling import CouplingAnalyzer
 
 if TYPE_CHECKING:
     from typing import Any
@@ -36,30 +41,84 @@ def create_parser() -> argparse.ArgumentParser:
         description="Generate comprehensive codebase inventory",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
-Examples:
-  codebase_index .                    # Scan current directory
-  codebase_index ./src -o index.json  # Scan src, output to file
-  codebase_index . --no-hash          # Skip file hashes (faster)
-  codebase_index . --summary          # Only show summary
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+QUICK START
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  codebase-index .                    # Scan current directory
+  codebase-index ./src -o index.json  # Scan src, output to file
+  codebase-index . --summary          # Quick overview only
 
-Configuration (for non-FastAPI projects):
-  codebase_index --init-config        # Generate starter config (edit with LLM)
-  codebase_index . --config my.yaml   # Use custom config for Django/Flask/etc.
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+LLM AGENT WORKFLOW (Recommended Sequence)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Step 1: EXPLORE - Run initial scan with defaults
+  codebase-index . --summary --no-hash
 
-Exclusion examples:
-  codebase_index . --exclude-dirs docs vendor  # Exclude specific directories
-  codebase_index . --exclude-ext .md .txt      # Exclude file extensions
-  codebase_index . --exclude "*.generated.*"   # Exclude patterns
+Step 2: ANALYZE - Review the output, identify:
+  - What framework is used (FastAPI, Django, Flask, Express, etc.)
+  - Project structure (where are routes, models, tests)
+  - What's missing or incorrectly detected
 
-Call graph queries (use with --load for speed):
-  codebase_index --load index.json --cg-query ChatService.stream_chat
-  codebase_index --load index.json --cg-file src/api/services/chat_service.py
-  codebase_index --load index.json --cg-callers AgentFactory.create
+Step 3: CONFIGURE (if needed) - Create custom config
+  codebase-index --init-config > codebase_index.yaml
+  # Then customize the YAML for the project's framework/patterns
 
-LLM Workflow (for any project):
-  1. Run: codebase_index --init-config > codebase_index.yaml
-  2. Ask Claude/GPT: "Customize this config for my Django project"
-  3. Run: codebase_index . --config codebase_index.yaml -o index.json
+Step 4: SCAN - Run full scan with config
+  codebase-index . --config codebase_index.yaml -o index.json
+
+Step 5: QUERY - Use analysis commands as needed
+  codebase-index --load index.json --check          # Check staleness
+  codebase-index --load index.json --impact file.py # Impact analysis
+  codebase-index --load index.json --tests-for Foo  # Find tests
+  codebase-index --load index.json --schema User    # Schema usage
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+CONFIG FILE GUIDELINES
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+The config file controls pattern matching. Key sections:
+
+  auth.parameters:   Regex patterns for auth in function signatures
+                     e.g., "Depends\\s*\\(\\s*get_current_user"
+
+  auth.decorators:   Regex patterns for auth decorators
+                     e.g., "@login_required", "@jwt_required"
+
+  models.patterns:   How to detect ORM models (base_class or marker)
+  schemas.patterns:  How to detect Pydantic/serializer schemas
+  routes.patterns:   How to detect API endpoints
+  exclude:           Directories/extensions/patterns to skip
+
+When customizing:
+  - Use regex patterns (remember to escape backslashes in YAML)
+  - Test incrementally: change one section, re-run, verify
+  - Check --verbose output to see what patterns are being used
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ANALYSIS QUERIES
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  --check              Check if index is stale (files changed since scan)
+  --tests-for SYMBOL   Find tests for a function/class
+  --impact FILE        Show what depends on a file (callers, tests, endpoints)
+  --schema NAME        Find endpoints using a schema
+  --cg-query FUNC      What does FUNC call?
+  --cg-callers FUNC    What calls FUNC?
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+DISCLAIMER
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+This tool uses static analysis (AST parsing + regex patterns). It may:
+
+  - MISS things: Dynamic routes, metaprogramming, runtime-generated code,
+    unusual patterns not covered by default config
+
+  - FALSE POSITIVES: Patterns that look like routes/models but aren't,
+    inherited auth that isn't detected, similar naming conventions
+
+For best results:
+  - Always verify critical findings against actual source code
+  - Customize the config for your specific framework/patterns
+  - Use --verbose to understand what's being detected and why
+  - Report issues: https://github.com/anthropics/codebase-index/issues
         """,
     )
 
@@ -137,6 +196,79 @@ LLM Workflow (for any project):
         help="What functions call FUNC? (inverse lookup)",
     )
 
+    # Analysis query options
+    analysis_group = parser.add_argument_group("Analysis Queries")
+    analysis_group.add_argument(
+        "--check",
+        action="store_true",
+        help="Check if loaded index is stale (use with --load)",
+    )
+    analysis_group.add_argument(
+        "--tests-for",
+        metavar="SYMBOL",
+        help="Find tests for a function/class (e.g., 'AgentFactory.create')",
+    )
+    analysis_group.add_argument(
+        "--impact",
+        metavar="FILE",
+        help="Show impact radius: callers, affected tests, affected endpoints",
+    )
+    analysis_group.add_argument(
+        "--schema",
+        metavar="NAME",
+        help="Find endpoints using a schema (e.g., 'AgentConfig')",
+    )
+    analysis_group.add_argument(
+        "--coupled-with",
+        metavar="FILE",
+        help="Find files tightly coupled to FILE (likely need changes together)",
+    )
+
+    # Advanced features
+    advanced_group = parser.add_argument_group("Advanced Features")
+    advanced_group.add_argument(
+        "--update",
+        action="store_true",
+        help="Incrementally update loaded index (only re-scan changed files)",
+    )
+    advanced_group.add_argument(
+        "--search",
+        metavar="QUERY",
+        help="Semantic search: find code by description (requires --build-embeddings first)",
+    )
+    advanced_group.add_argument(
+        "--build-embeddings",
+        action="store_true",
+        help="Build embeddings for semantic search (requires sentence-transformers)",
+    )
+    advanced_group.add_argument(
+        "--embedding-model",
+        metavar="MODEL",
+        default="unixcoder",
+        help="Embedding model: unixcoder (default), codebert, codet5, minilm, or HuggingFace name",
+    )
+    advanced_group.add_argument(
+        "--generate-summaries",
+        action="store_true",
+        help="Generate LLM summaries for functions (requires API key)",
+    )
+    advanced_group.add_argument(
+        "--summary-provider",
+        metavar="PROVIDER",
+        choices=["openrouter", "anthropic", "openai"],
+        help="Summary provider: openrouter, anthropic, openai (auto-detects from API key)",
+    )
+    advanced_group.add_argument(
+        "--summary-model",
+        metavar="MODEL",
+        help="Model for summaries (e.g., anthropic/claude-3-haiku, gpt-4o-mini)",
+    )
+    advanced_group.add_argument(
+        "--api-key",
+        metavar="KEY",
+        help="API key for summaries (alternative to environment variable)",
+    )
+
     parser.add_argument(
         "-v", "--verbose",
         action="store_true",
@@ -207,6 +339,202 @@ def main() -> None:
         result = load_index(args.load, args.verbose)
     else:
         result = scan_codebase(args, config)
+
+    # Handle --update: incremental update
+    if args.update:
+        if not args.load:
+            print("Error: --update requires --load to specify an index file", file=sys.stderr)
+            sys.exit(1)
+        from codebase_index.incremental import incremental_update
+
+        root = Path(args.path).resolve()
+        exclude = DEFAULT_EXCLUDE.copy()
+        if args.exclude:
+            exclude.extend(args.exclude)
+        if args.exclude_dirs:
+            exclude.extend(args.exclude_dirs)
+
+        exclude_extensions: set[str] = set()
+        if args.exclude_ext:
+            for ext in args.exclude_ext:
+                if not ext.startswith('.'):
+                    ext = '.' + ext
+                exclude_extensions.add(ext.lower())
+
+        update_result = incremental_update(
+            root=root,
+            index_data=result,
+            exclude=exclude,
+            exclude_extensions=exclude_extensions,
+            config=config,
+        )
+
+        changes = update_result["changes"]
+        if args.verbose:
+            print(f"Incremental update complete:", file=sys.stderr)
+            print(f"  Added: {len(changes['added'])} files", file=sys.stderr)
+            print(f"  Updated: {len(changes['updated'])} files", file=sys.stderr)
+            print(f"  Deleted: {len(changes['deleted'])} files", file=sys.stderr)
+            print(f"  Unchanged: {changes['unchanged']} files", file=sys.stderr)
+            print(f"  Duration: {changes['duration_ms']}ms", file=sys.stderr)
+
+        # Use the updated index for output
+        result = update_result["index"]
+
+    # Handle --check: staleness check
+    if args.check:
+        if not args.load:
+            print("Error: --check requires --load to specify an index file", file=sys.stderr)
+            sys.exit(1)
+        root = Path(args.path).resolve()
+        checker = StalenessChecker(root, result)
+        staleness = checker.check()
+        print(json.dumps(staleness, indent=2, default=str))
+        return
+
+    # Handle --tests-for: find tests for a symbol
+    if args.tests_for:
+        mapper = TestMapper(result)
+        tests_result = mapper.find_tests_for(args.tests_for)
+        print(json.dumps(tests_result, indent=2, default=str))
+        return
+
+    # Handle --impact: analyze impact radius of a file
+    if args.impact:
+        analyzer = ImpactAnalyzer(result)
+        impact_result = analyzer.analyze_file(args.impact)
+        print(json.dumps(impact_result, indent=2, default=str))
+        return
+
+    # Handle --schema: find endpoints using a schema
+    if args.schema:
+        root = Path(args.path).resolve()
+        mapper = SchemaMapper(result, root=root)
+        schema_result = mapper.find_endpoints_for_schema(args.schema)
+        print(json.dumps(schema_result, indent=2, default=str))
+        return
+
+    # Handle --coupled-with: find tightly coupled files
+    if args.coupled_with:
+        analyzer = CouplingAnalyzer(result)
+        coupling_result = analyzer.analyze(args.coupled_with)
+        print(json.dumps(coupling_result, indent=2, default=str))
+        return
+
+    # Handle --build-embeddings: generate embeddings for semantic search
+    if args.build_embeddings:
+        from codebase_index.analyzers.semantic import (
+            build_embeddings,
+            check_semantic_available,
+            MODELS,
+            DEFAULT_MODEL,
+        )
+
+        if not check_semantic_available():
+            print(
+                "Error: Semantic search requires sentence-transformers.\n"
+                "Install with: pip install codebase-index[semantic]",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+
+        root = Path(args.path).resolve()
+        model = getattr(args, 'embedding_model', None) or DEFAULT_MODEL
+
+        if args.verbose:
+            model_info = MODELS.get(model, {})
+            model_name = model_info.get("name", model) if model_info else model
+            print(f"Building embeddings with model: {model_name}", file=sys.stderr)
+
+        result = build_embeddings(result, root=root, model=model)
+
+        if args.verbose:
+            semantic = result.get("semantic", {})
+            print(f"  Generated embeddings for {semantic.get('count', 0)} symbols", file=sys.stderr)
+            print(f"  Model: {semantic.get('model', 'unknown')}", file=sys.stderr)
+
+        # Fall through to output the updated index
+
+    # Handle --search: semantic search
+    if args.search:
+        from codebase_index.analyzers.semantic import (
+            semantic_search,
+            check_semantic_available,
+        )
+
+        if not check_semantic_available():
+            print(
+                "Error: Semantic search requires sentence-transformers.\n"
+                "Install with: pip install codebase-index[semantic]",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+
+        search_result = semantic_search(result, args.search)
+        print(json.dumps(search_result, indent=2, default=str))
+        return
+
+    # Handle --generate-summaries: LLM-generated function descriptions
+    if args.generate_summaries:
+        from codebase_index.analyzers.summaries import (
+            generate_summaries,
+            check_summaries_available,
+            check_api_key,
+            get_available_provider,
+        )
+
+        if not check_summaries_available():
+            print(
+                "Error: Summary generation requires httpx.\n"
+                "Install with: pip install codebase-index[summaries]",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+
+        api_key = getattr(args, 'api_key', None)
+
+        if not api_key and not check_api_key():
+            print(
+                "Error: No API key found. Either:\n"
+                "  - Pass --api-key KEY\n"
+                "  - Set OPENROUTER_API_KEY (recommended - access any model)\n"
+                "  - Set ANTHROPIC_API_KEY\n"
+                "  - Set OPENAI_API_KEY",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+
+        root = Path(args.path).resolve()
+        provider = getattr(args, 'summary_provider', None)
+        model = getattr(args, 'summary_model', None)
+
+        # If API key passed via argument, need to specify provider too
+        if api_key and not provider:
+            print(
+                "Error: --api-key requires --summary-provider to be specified.\n"
+                "Example: --api-key sk-... --summary-provider openrouter",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+
+        if args.verbose:
+            detected_provider = provider or get_available_provider()
+            print(f"Generating LLM summaries (provider: {detected_provider})...", file=sys.stderr)
+
+        result = generate_summaries(result, root, provider=provider, model=model, api_key=api_key)
+
+        if args.verbose:
+            summaries = result.get("summaries", {})
+            stats = summaries.get("stats", {})
+            print(f"  Provider: {summaries.get('provider', 'unknown')}", file=sys.stderr)
+            print(f"  Model: {summaries.get('model', 'unknown')}", file=sys.stderr)
+            print(f"  Generated: {stats.get('generated', 0)}", file=sys.stderr)
+            print(f"  Cached: {stats.get('cached', 0)}", file=sys.stderr)
+            print(f"  Skipped: {stats.get('skipped', 0)}", file=sys.stderr)
+            if stats.get('errors', 0) > 0:
+                print(f"  Errors: {stats.get('errors', 0)}", file=sys.stderr)
+
+        # Fall through to output the updated index
 
     # Handle call graph queries
     if has_cg_query:

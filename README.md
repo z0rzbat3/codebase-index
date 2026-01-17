@@ -1,6 +1,6 @@
 # Codebase Index
 
-A CLI tool that generates comprehensive, LLM-friendly inventories of your codebase. Designed to help AI assistants understand, navigate, and analyze code.
+A CLI tool that generates comprehensive, LLM-friendly inventories of your codebase. **Built for AI assistants** like Claude Code, Cursor, and Copilot to understand, navigate, and analyze code.
 
 ## Why?
 
@@ -9,6 +9,20 @@ LLMs work better when they have structured context about your codebase. This too
 - **How it connects**: Call graphs, imports, dependencies
 - **Where things are**: File locations, line numbers, categories
 - **What's missing**: Test coverage gaps, orphaned files, documentation
+
+## Supported & Limitations
+
+| ✅ Works Well | ⚠️ May Miss |
+|--------------|-------------|
+| Python (full AST parsing) | Dynamic/runtime routes |
+| TypeScript/JavaScript | Metaprogramming |
+| FastAPI, Flask, Django, Express | Unusual decorator patterns |
+| SQLAlchemy, Pydantic, Django ORM | Complex inheritance |
+| Standard project structures | Code generation |
+
+**Config-driven**: Easily extend for new frameworks by adding regex patterns. See `--init-config`.
+
+**Always verify**: Static analysis has limits. Check critical findings against source code.
 
 ## Quick Start
 
@@ -47,6 +61,34 @@ python codebase_index.py .
 - Python 3.9+
 - PyYAML (optional, for config file support)
 
+**Optional Features:**
+```bash
+# Semantic search (find code by description)
+# Uses code-specific models: unixcoder, codebert, codet5
+pip install codebase-index[semantic]
+
+# LLM-generated summaries (supports multiple providers)
+# Providers: OpenRouter (any model), Anthropic, OpenAI
+pip install codebase-index[summaries]
+
+# All optional features
+pip install codebase-index[all]
+```
+
+**API Keys for Summaries:**
+```bash
+# Option 1: OpenRouter (recommended - access any model)
+export OPENROUTER_API_KEY=sk-or-...
+
+# Option 2: Anthropic direct
+export ANTHROPIC_API_KEY=sk-ant-...
+
+# Option 3: OpenAI
+export OPENAI_API_KEY=sk-...
+
+# Or pass via CLI: --api-key KEY --summary-provider PROVIDER
+```
+
 ## Project Structure
 
 ```
@@ -76,12 +118,21 @@ codebase_index/
 │   ├── websocket.py      # WebSocket endpoints
 │   └── alembic.py        # Database migrations
 │
+├── incremental.py        # Incremental index updates
+│
 └── analyzers/            # Code analysis tools
     ├── imports.py        # Missing/unused deps detection
     ├── auth.py           # Auth requirements per endpoint
     ├── complexity.py     # Large file/function warnings
     ├── coverage.py       # Test coverage mapping
-    └── orphans.py        # Dead code detection
+    ├── orphans.py        # Dead code detection
+    ├── staleness.py      # Index staleness detection
+    ├── test_mapper.py    # Symbol-to-test mapping
+    ├── impact.py         # Change impact radius analysis
+    ├── schema_mapper.py  # Schema-to-endpoint mapping
+    ├── coupling.py       # File coupling analysis
+    ├── semantic.py       # Semantic search with embeddings
+    └── summaries.py      # LLM-generated code summaries
 ```
 
 ## Adding a New Language Parser
@@ -156,12 +207,13 @@ The parser is automatically registered and will be used for `.rs` files.
 ## CLI Reference
 
 ```
-usage: codebase_index [-h] [-o OUTPUT] [--load FILE] [--no-hash]
+usage: codebase-index [-h] [-o OUTPUT] [--load FILE] [--no-hash]
                       [--summary] [--exclude EXCLUDE [EXCLUDE ...]]
                       [--exclude-dirs DIR [DIR ...]]
                       [--exclude-ext EXT [EXT ...]] [--config FILE]
                       [--init-config] [--cg-query FUNC] [--cg-file FILE]
-                      [--cg-callers FUNC] [-v] [--version]
+                      [--cg-callers FUNC] [--check] [--tests-for SYMBOL]
+                      [--impact FILE] [--schema NAME] [-v] [--version]
                       [path]
 ```
 
@@ -195,6 +247,27 @@ usage: codebase_index [-h] [-o OUTPUT] [--load FILE] [--no-hash]
 | `--cg-query FUNC` | What does FUNC call? |
 | `--cg-file FILE` | Show call graph for all functions in FILE |
 | `--cg-callers FUNC` | What functions call FUNC? |
+
+### Analysis Queries
+| Flag | Description |
+|------|-------------|
+| `--check` | Check if loaded index is stale (requires `--load`) |
+| `--tests-for SYMBOL` | Find tests for a function/class (e.g., `UserService.create`) |
+| `--impact FILE` | Show impact radius: callers, affected tests, affected endpoints |
+| `--schema NAME` | Find endpoints using a schema (e.g., `AgentConfig`) |
+| `--coupled-with FILE` | Find files tightly coupled to FILE (likely need changes together) |
+
+### Advanced Features
+| Flag | Description |
+|------|-------------|
+| `--update` | Incrementally update loaded index (only re-scan changed files) |
+| `--build-embeddings` | Build embeddings for semantic search (requires `sentence-transformers`) |
+| `--embedding-model MODEL` | Embedding model: `unixcoder` (default), `codebert`, `codet5`, `minilm` |
+| `--search QUERY` | Semantic search: find code by description (requires embeddings) |
+| `--generate-summaries` | Generate LLM summaries for functions (requires API key) |
+| `--summary-provider PROVIDER` | Provider: `openrouter`, `anthropic`, `openai` (auto-detects from env) |
+| `--summary-model MODEL` | Model name (e.g., `anthropic/claude-3-haiku`, `gpt-4o-mini`) |
+| `--api-key KEY` | API key for summaries (alternative to environment variable) |
 
 ## Output Format
 
@@ -289,6 +362,26 @@ python -m codebase_index --load index.json --cg-file src/api/services/user_servi
 
 # Query: What calls the authenticate function?
 python -m codebase_index --load index.json --cg-callers authenticate
+```
+
+### Analysis Queries
+
+```bash
+# Check if index is stale (detects changes since generation)
+python -m codebase_index --load index.json --check
+# Output: {"is_stale": true, "changed_files": [...], "summary": "48 files changed"}
+
+# Find tests for a function/class
+python -m codebase_index --load index.json --tests-for UserService.create
+# Output: {"tests": [...], "test_files": ["tests/test_user_service.py"]}
+
+# Analyze impact radius of changes to a file
+python -m codebase_index --load index.json --impact src/services/auth.py
+# Output: {"direct_callers": [...], "affected_tests": [...], "affected_endpoints": [...]}
+
+# Find endpoints using a schema
+python -m codebase_index --load index.json --schema UserCreate
+# Output: {"endpoints": [{"method": "POST", "path": "/users"}], "usages": [...]}
 ```
 
 ### Using with LLMs
@@ -386,8 +479,10 @@ python -m codebase_index --load index.json --cg-callers modified_function
 
 ### 3. Impact Analysis
 ```bash
-# What would break if I change this function?
-python -m codebase_index --load index.json --cg-callers DatabaseConnection
+# What would break if I change this file?
+python -m codebase_index --load index.json --impact src/services/database.py
+
+# Shows: direct callers, transitive callers, affected tests, affected endpoints
 ```
 
 ### 4. Finding Dead Code
@@ -398,12 +493,31 @@ python -m codebase_index . --summary | grep orphaned
 
 ### 5. Test Coverage Gaps
 ```bash
+# Find tests for a specific function
+python -m codebase_index --load index.json --tests-for UserService.create
+
 # See which source files lack tests
 python -m codebase_index . -o index.json
 # Check test_coverage.uncovered_files in output
 ```
 
-### 6. LLM-Assisted Development
+### 6. CI/CD: Stale Index Check
+```bash
+# Check if index needs regenerating before using cached version
+python -m codebase_index --load index.json --check
+
+# Output includes: is_stale, changed_files, new_files, deleted_files
+```
+
+### 7. Schema Usage Discovery
+```bash
+# Find all endpoints that use a schema
+python -m codebase_index --load index.json --schema UserCreate
+
+# Useful for: API documentation, breaking change detection
+```
+
+### 8. LLM-Assisted Development
 ```bash
 # Give an LLM full codebase context
 python -m codebase_index . \
@@ -411,6 +525,87 @@ python -m codebase_index . \
   -o index.json
 
 # Then: "Based on index.json, help me add a new endpoint for..."
+```
+
+### 9. Coupling Analysis
+```bash
+# Find files tightly coupled to a specific file
+python -m codebase_index --load index.json --coupled-with src/services/auth.py
+
+# Output:
+# {
+#   "file": "src/services/auth.py",
+#   "coupled_files": [
+#     {"file": "src/routers/auth.py", "score": 0.85, "reasons": ["imports", "calls"]},
+#     {"file": "tests/test_auth.py", "score": 0.65, "reasons": ["naming", "calls"]}
+#   ],
+#   "summary": "2 tightly coupled files"
+# }
+```
+
+### 10. Incremental Updates
+```bash
+# First scan
+python -m codebase_index . -o index.json
+
+# Later: only re-scan changed files (much faster)
+python -m codebase_index --load index.json --update -o index.json
+
+# Shows: added, updated, deleted, unchanged file counts
+```
+
+### 11. Semantic Search
+```bash
+# Build embeddings (one-time, requires sentence-transformers)
+pip install codebase-index[semantic]
+
+# Default model: unixcoder (code-specific, recommended)
+python -m codebase_index . --build-embeddings -o index.json
+
+# Or choose a different model
+python -m codebase_index . --build-embeddings --embedding-model codebert -o index.json
+
+# Available models: unixcoder (default), codebert, codet5, minilm
+
+# Search by concept, not keywords
+python -m codebase_index --load index.json --search "retry logic with backoff"
+python -m codebase_index --load index.json --search "database connection pool"
+
+# Output:
+# {
+#   "query": "retry logic with backoff",
+#   "results": [
+#     {"symbol": "retry_with_exponential_backoff", "file": "src/utils/http.py", "score": 0.89}
+#   ],
+#   "model": "microsoft/unixcoder-base"
+# }
+```
+
+### 12. LLM-Generated Summaries
+```bash
+# Install dependency
+pip install codebase-index[summaries]
+
+# Option 1: Use environment variable (auto-detects provider)
+export OPENROUTER_API_KEY=sk-or-...   # Recommended: access any model
+# OR export ANTHROPIC_API_KEY=sk-ant-...
+# OR export OPENAI_API_KEY=sk-...
+python -m codebase_index . --generate-summaries -o index.json
+
+# Option 2: Pass API key directly (requires --summary-provider)
+python -m codebase_index . --generate-summaries \
+  --api-key "sk-or-..." \
+  --summary-provider openrouter \
+  --summary-model "anthropic/claude-3-haiku" \
+  -o index.json
+
+# Option 3: Use specific provider and model
+python -m codebase_index . --generate-summaries \
+  --summary-provider openai \
+  --summary-model gpt-4o-mini \
+  -o index.json
+
+# Summaries are cached by code hash - subsequent runs only generate for changed code
 ```
 
 ## Output Size Considerations
@@ -431,6 +626,8 @@ python -m codebase_index . \
 
 | Version | Features |
 |---------|----------|
+| 2.2 | **Advanced features**: `--coupled-with`, `--update`, `--search`, `--build-embeddings`, `--generate-summaries` |
+| 2.1 | **Analysis queries**: `--check` staleness, `--tests-for`, `--impact`, `--schema` |
 | 2.0 | **Modular architecture**, plugin system for parsers, proper logging |
 | 1.7 | YAML config, --init-config, multi-framework support |
 | 1.6 | Call graph, code duplication, query commands |

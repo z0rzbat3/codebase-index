@@ -2,6 +2,42 @@
 
 This guide explains how to extend codebase-index with support for new languages, frameworks, and analysis features.
 
+## Tool Purpose & Readiness
+
+**This tool is designed for LLM assistants** (Claude Code, Cursor, Copilot, etc.) to understand codebases quickly. It provides structured JSON output that's easy for LLMs to parse and reason about.
+
+### Current Support
+
+| Category | Supported | Notes |
+|----------|-----------|-------|
+| **Languages** | Python, TypeScript/JS, SQL, Docker | Python has full AST parsing; others use regex |
+| **Frameworks** | FastAPI, Flask, Django, Express | Via config patterns (easily extensible) |
+| **ORMs** | SQLAlchemy, Django ORM, Pydantic | Via config patterns |
+| **Analysis** | Call graph, impact, tests, schemas | Full support |
+
+### Limitations (Static Analysis)
+
+This tool uses AST parsing and regex patterns. It **will miss**:
+- Dynamic routes (e.g., `app.add_route(path_from_db, handler)`)
+- Metaprogramming / code generation
+- Runtime-computed patterns
+- Decorators from unusual libraries
+
+It **may produce false positives** for:
+- Test fixtures that mimic production code
+- Similar naming patterns that aren't actual routes/models
+- Complex inheritance hierarchies
+
+### Ready for Any Codebase?
+
+**Yes, with caveats:**
+1. Works best on Python/TypeScript projects with standard patterns
+2. Custom frameworks need config customization (see below)
+3. LLM agents should verify critical findings against source
+4. Use `--verbose` to understand what's being detected
+
+---
+
 ## Project Structure
 
 ```
@@ -526,6 +562,64 @@ pytest tests/ -v
 5. Run type checking: `mypy codebase_index/`
 6. Run linting: `ruff check codebase_index/`
 7. Submit a pull request
+
+## For LLM Agents: Quick Extension Guide
+
+If you're an LLM assistant and need to add support for a new framework/pattern:
+
+### Option 1: Config-Only (No Code Changes)
+
+Most frameworks can be supported by creating a custom config file:
+
+```yaml
+# myframework.yaml
+routes:
+  patterns:
+    - regex: "@MyFramework\\.route\\(['\"]"
+      framework: myframework
+
+models:
+  patterns:
+    - base_class: "MyORM.Model"
+      type: myframework
+
+auth:
+  parameters:
+    - "Depends\\s*\\(\\s*my_auth_dependency"
+  decorators:
+    - "@my_auth_decorator"
+```
+
+Then run: `codebase-index . --config myframework.yaml -o index.json`
+
+### Option 2: Add a Parser (New Language)
+
+1. Create `codebase_index/parsers/mylang.py`
+2. Use the `@ParserRegistry.register("mylang", [".ext"])` decorator
+3. Implement `scan(self, filepath: Path) -> dict`
+4. Import in `codebase_index/parsers/__init__.py`
+
+See the Rust parser example above for the full template.
+
+### Option 3: Add an Analyzer (New Analysis)
+
+1. Create `codebase_index/analyzers/myanalyzer.py`
+2. Implement a class with an `analyze()` method
+3. Add CLI flag in `cli.py` if needed
+4. Wire up in the main function
+
+### Testing Your Changes
+
+```bash
+# Quick test
+codebase-index . --summary -v
+
+# Full test with output
+codebase-index . -o test.json && cat test.json | head -100
+
+# Verify specific detection
+codebase-index --load test.json --cg-query MyFunction
+```
 
 ## Questions?
 
