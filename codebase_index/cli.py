@@ -286,6 +286,51 @@ For best results:
         help="API key for summaries (alternative to environment variable)",
     )
 
+    # Documentation generation
+    docs_group = parser.add_argument_group("Documentation Generation")
+    docs_group.add_argument(
+        "--generate-docs",
+        action="store_true",
+        help="Generate documentation from the index",
+    )
+    docs_group.add_argument(
+        "--output-dir",
+        metavar="DIR",
+        default="docs/generated",
+        help="Output directory for generated docs (default: docs/generated)",
+    )
+    docs_group.add_argument(
+        "--doc-layers",
+        metavar="LAYERS",
+        default="all",
+        help="Comma-separated doc layers: api,modules,reference,architecture or 'all' (default: all)",
+    )
+    docs_group.add_argument(
+        "--doc-diff",
+        metavar="DIR",
+        help="Check documentation freshness against source files in DIR",
+    )
+    docs_group.add_argument(
+        "--doc-template",
+        metavar="DIR",
+        help="Custom Jinja2 templates directory for documentation generation",
+    )
+    docs_group.add_argument(
+        "--init-templates",
+        metavar="DIR",
+        help="Export default documentation templates to DIR for customization",
+    )
+    docs_group.add_argument(
+        "--watch",
+        action="store_true",
+        help="Watch for file changes and regenerate documentation automatically",
+    )
+    docs_group.add_argument(
+        "--init-mkdocs",
+        metavar="DIR",
+        help="Generate mkdocs.yml config for docs in DIR (e.g., --init-mkdocs docs/)",
+    )
+
     parser.add_argument(
         "-v", "--verbose",
         action="store_true",
@@ -319,6 +364,38 @@ def main() -> None:
     # Handle --init-config: just output the template and exit
     if args.init_config:
         print(get_config_template())
+        return
+
+    # Handle --init-templates: export default templates
+    if args.init_templates:
+        from codebase_index.analyzers.templates import create_template_dir, check_jinja2_available
+
+        if not check_jinja2_available():
+            print(
+                "Error: Jinja2 is required for templates.\n"
+                "Install with: pip install jinja2",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+
+        template_dir = Path(args.init_templates)
+        create_template_dir(template_dir)
+        print(f"Default templates exported to: {template_dir}")
+        print("Customize the .j2 files and use with --doc-template")
+        return
+
+    # Handle --init-mkdocs: generate mkdocs.yml config
+    if args.init_mkdocs:
+        from codebase_index.analyzers.mkdocs import generate_mkdocs_config
+
+        docs_dir = Path(args.init_mkdocs)
+        if not docs_dir.exists():
+            print(f"Error: Directory not found: {docs_dir}", file=sys.stderr)
+            sys.exit(1)
+
+        config_path = generate_mkdocs_config(docs_dir)
+        print(f"Generated: {config_path}")
+        print("Run 'mkdocs serve' to preview documentation")
         return
 
     # Load config if specified
@@ -627,6 +704,132 @@ def main() -> None:
                 print(f"  Errors: {stats.get('errors', 0)}", file=sys.stderr)
 
         # Fall through to output the updated index
+
+    # Handle --generate-docs: generate documentation from index
+    if args.generate_docs:
+        from codebase_index.analyzers.doc_generator import (
+            generate_api_reference,
+            generate_module_readmes,
+            generate_function_reference,
+            generate_architecture_docs,
+        )
+
+        output_dir = Path(args.output_dir)
+        layers = args.doc_layers.lower().split(",")
+        template_dir = Path(args.doc_template) if args.doc_template else None
+
+        if args.verbose:
+            print(f"Generating documentation to: {output_dir}", file=sys.stderr)
+            print(f"Layers: {layers}", file=sys.stderr)
+            if template_dir:
+                print(f"Using templates from: {template_dir}", file=sys.stderr)
+
+        generated = []
+
+        # Parse which layers to generate
+        generate_all = "all" in layers
+        generate_api = generate_all or "api" in layers
+        generate_modules = generate_all or "modules" in layers
+        generate_reference = generate_all or "reference" in layers
+        generate_architecture = generate_all or "architecture" in layers
+
+        # Generate API reference
+        if generate_api:
+            api_result = generate_api_reference(result, output_dir, template_dir=template_dir)
+            generated.append(api_result)
+            if args.verbose:
+                print(f"  API: {api_result.get('endpoints', 0)} endpoints in {api_result.get('routers', 0)} routers", file=sys.stderr)
+
+        # Generate Module READMEs
+        if generate_modules:
+            modules_result = generate_module_readmes(result, output_dir, template_dir=template_dir)
+            generated.append(modules_result)
+            if args.verbose:
+                print(f"  Modules: {modules_result.get('modules', 0)} modules documented", file=sys.stderr)
+
+        # Generate Function Reference
+        if generate_reference:
+            root = Path(args.path).resolve()
+            ref_result = generate_function_reference(result, output_dir, root=root, template_dir=template_dir)
+            generated.append(ref_result)
+            if args.verbose:
+                print(f"  Reference: {ref_result.get('symbols', 0)} symbols in {ref_result.get('modules', 0)} files", file=sys.stderr)
+
+        # Generate Architecture docs
+        if generate_architecture:
+            arch_result = generate_architecture_docs(
+                result,
+                output_dir,
+                provider=getattr(args, "summary_provider", None),
+                model=getattr(args, "summary_model", None),
+                api_key=getattr(args, "api_key", None),
+                template_dir=template_dir,
+            )
+            generated.append(arch_result)
+            if args.verbose:
+                print(f"  Architecture: {arch_result.get('components', 0)} components documented", file=sys.stderr)
+
+        # Output summary
+        summary = {
+            "documentation": {
+                "output_dir": str(output_dir),
+                "layers": layers,
+                "generated": generated,
+            }
+        }
+        print(json.dumps(summary, indent=2))
+
+        # If --watch is specified, start watching for changes
+        if args.watch:
+            from codebase_index.analyzers.watcher import watch_and_regenerate
+
+            root = Path(args.path).resolve()
+
+            def regenerate():
+                """Regenerate documentation."""
+                # Re-scan the codebase
+                nonlocal result
+                result = scan_codebase(args, config)
+
+                # Regenerate each layer
+                if generate_api:
+                    generate_api_reference(result, output_dir, template_dir=template_dir)
+                if generate_modules:
+                    generate_module_readmes(result, output_dir, template_dir=template_dir)
+                if generate_reference:
+                    generate_function_reference(result, output_dir, root=root, template_dir=template_dir)
+                if generate_architecture:
+                    generate_architecture_docs(
+                        result,
+                        output_dir,
+                        provider=getattr(args, "summary_provider", None),
+                        model=getattr(args, "summary_model", None),
+                        api_key=getattr(args, "api_key", None),
+                        template_dir=template_dir,
+                    )
+
+            watch_and_regenerate(root, regenerate, verbose=args.verbose)
+
+        return
+
+    # Handle --doc-diff: check documentation freshness
+    if args.doc_diff:
+        from codebase_index.analyzers.doc_generator import check_doc_freshness
+
+        doc_dir = Path(args.doc_diff)
+        root = Path(args.path).resolve()
+
+        if not doc_dir.exists():
+            print(f"Error: Documentation directory '{doc_dir}' does not exist", file=sys.stderr)
+            sys.exit(1)
+
+        diff_result = check_doc_freshness(result, doc_dir, root)
+
+        if args.verbose:
+            print(f"Documentation freshness check: {diff_result.get('summary', '')}", file=sys.stderr)
+
+        print(json.dumps(diff_result, indent=2))
+        return
 
     # Handle call graph queries
     if has_cg_query:

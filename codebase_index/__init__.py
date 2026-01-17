@@ -5,7 +5,7 @@ Supports pluggable language parsers for Python (AST), TypeScript (regex),
 SQL (regex), Docker (YAML), and custom languages.
 """
 
-__version__ = "2.2.0"
+__version__ = "2.3.0"
 __author__ = "Isaac"
 
 from codebase_index.scanner import CodebaseScanner

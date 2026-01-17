@@ -277,7 +277,7 @@ class PythonParser(BaseParser):
                     match = re.match(regex, dec_name)
                     if match:
                         route_info = self._extract_route_info(
-                            dec, node.name, node.lineno, pattern, match
+                            dec, node, pattern, match
                         )
                         if route_info:
                             result["routes"].append(route_info)
@@ -289,14 +289,16 @@ class PythonParser(BaseParser):
     def _extract_route_info(
         self,
         decorator: ast.expr,
-        func_name: str,
-        line: int,
+        func_node: ast.FunctionDef | ast.AsyncFunctionDef,
         pattern: dict[str, Any],
         match: re.Match,
     ) -> dict[str, Any] | None:
-        """Extract route information from a decorator."""
+        """Extract route information from a decorator and function."""
         if not isinstance(decorator, ast.Call):
             return None
+
+        func_name = func_node.name
+        line = func_node.lineno
 
         # Try to extract HTTP method from regex groups
         method = "GET"
@@ -313,12 +315,33 @@ class PythonParser(BaseParser):
         if decorator.args and isinstance(decorator.args[0], ast.Constant):
             path = decorator.args[0].value
 
+        # Extract summary/description from decorator keyword arguments
+        summary = None
+        description = None
+        for keyword in decorator.keywords:
+            if keyword.arg == "summary" and isinstance(keyword.value, ast.Constant):
+                summary = keyword.value.value
+            elif keyword.arg == "description" and isinstance(keyword.value, ast.Constant):
+                description = keyword.value.value
+
+        # Get function docstring
+        docstring = ast.get_docstring(func_node)
+
+        # Build description: prefer decorator summary, then docstring first line
+        route_description = summary
+        if not route_description and docstring:
+            route_description = docstring.split("\n")[0].strip()
+
         return {
             "method": method,
             "path": path,
             "handler": func_name,
+            "function": func_name,  # Alias for compatibility
             "line": line,
             "framework": pattern.get("framework", "unknown"),
+            "summary": summary,
+            "description": route_description,
+            "docstring": docstring,
         }
 
     def _get_name(self, node: ast.expr) -> str:

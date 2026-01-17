@@ -187,6 +187,7 @@ class CodebaseScanner:
                 "classes": [],
                 "methods": [],
             },
+            "router_prefixes": {},
             "call_graph": {},
             "potential_duplicates": [],
         }
@@ -321,6 +322,10 @@ class CodebaseScanner:
         if exports.get("fastapi_routes"):
             router_name = Path(file_path).stem
             prefix = route_prefixes.get(router_name, "")
+
+            # Store prefix mapping by file path for doc generator
+            if prefix:
+                result["router_prefixes"][file_path] = prefix
 
             annotated_routes = self.auth_scanner.scan_file(
                 self.root / file_path,

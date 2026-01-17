@@ -188,6 +188,7 @@ class IncrementalUpdater:
             "schemas": [],
             "symbol_index": self.index_data.get("symbol_index", {}),
             "call_graph": dict(self.index_data.get("call_graph", {})),
+            "router_prefixes": {},
         }
 
         # Files to re-scan
@@ -220,6 +221,11 @@ class IncrementalUpdater:
         for schema in self.index_data.get("schemas", []):
             if schema.get("file") in unchanged_files:
                 updated["schemas"].append(schema)
+
+        # Copy router prefixes from unchanged files
+        for file_path, prefix in self.index_data.get("router_prefixes", {}).items():
+            if file_path in unchanged_files:
+                updated["router_prefixes"][file_path] = prefix
 
         # Re-scan changed/added files
         if files_to_scan:
@@ -297,9 +303,21 @@ class IncrementalUpdater:
 
                         # Extract endpoints
                         if exports.get("fastapi_routes"):
+                            # Get router prefix if available
+                            router_name = file_path.stem
+                            # Try to get prefix from existing data
+                            prefix = ""
+                            for fp, pfx in self.index_data.get("router_prefixes", {}).items():
+                                if Path(fp).stem == router_name:
+                                    prefix = pfx
+                                    updated["router_prefixes"][rel_path] = prefix
+                                    break
+
                             for route in exports["fastapi_routes"]:
+                                full_path = prefix + (route.get("path") or "")
                                 updated["api_endpoints"].append({
                                     **route,
+                                    "full_path": full_path,
                                     "file": rel_path,
                                 })
 

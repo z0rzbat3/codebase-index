@@ -465,6 +465,72 @@ codebase-index --load index.json --config config.yaml --update -o updated.json
 
 ---
 
+## Documentation Generator - NEW FEATURE ✅
+
+Tested on 2026-01-17.
+
+### Features Implemented
+
+| Feature | Command | Status |
+|---------|---------|--------|
+| Single symbol docs | `--doc-for SYMBOL` | ✅ Works |
+| Bulk generation | `--generate-docs` | ✅ Works |
+| Layer selection | `--doc-layers api,modules,reference,architecture` | ✅ Works |
+| Freshness check | `--doc-diff DIR` | ✅ Works |
+| Custom templates | `--doc-template DIR` | ✅ Works |
+| Export templates | `--init-templates DIR` | ✅ Works |
+| Watch mode | `--watch` | Not tested |
+
+### Test Results
+
+**`--doc-for AgentFactory`:**
+- Generated 49KB of documentation
+- Includes: type, file location, description, calls, callers (20+), tests, source code
+
+**`--generate-docs` (all layers):**
+- API: 12 routers, 94 endpoints documented
+- Modules: 47 module READMEs generated
+- Reference: 233 reference docs generated
+- Architecture: Overview + 13 component docs
+
+**`--doc-diff`:**
+- Before generation: 233 missing docs detected
+- After generation: 0 stale, 0 missing, 233 OK
+
+**`--init-templates`:**
+- Exports Jinja2 templates for all 4 layers
+- Templates are customizable for project-specific formatting
+
+### Sample Output Quality
+
+**Architecture Overview** includes:
+- Project summary (files, lines, languages)
+- Components table with metrics
+- ASCII component diagram
+- Architectural patterns detection
+
+**Module Docs** include:
+- File listing with category and line count
+- Class/method inventory
+- Dependencies
+
+**API Docs** include:
+- Endpoint table with methods
+- Authentication requirements
+- Path/query parameters
+- Request/response schemas
+- Curl examples
+
+### Areas for Polish
+
+1. API endpoint descriptions often show "-" (empty)
+2. Method descriptions show "No description" when no docstring
+3. Full endpoint paths missing prefix (e.g., /api/v1)
+
+These are minor formatting issues - the structure and data are correct.
+
+---
+
 ### Final Assessment
 
 **Overall Grade: A** (upgraded from A-)
