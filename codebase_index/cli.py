@@ -228,6 +228,11 @@ For best results:
         metavar="SYMBOL",
         help="Get LLM-generated summary for a function/method (e.g., 'scan_file', 'Parser.parse')",
     )
+    analysis_group.add_argument(
+        "--doc-for",
+        metavar="SYMBOL",
+        help="Generate full documentation for a symbol (signature, callers, tests, code)",
+    )
 
     # Advanced features
     advanced_group = parser.add_argument_group("Advanced Features")
@@ -494,6 +499,17 @@ def main() -> None:
             print(json.dumps({"symbol": symbol, "error": "No matching symbols found"}, indent=2))
         else:
             print(json.dumps({"symbol": symbol, "matches": matches}, indent=2))
+        return
+
+    # Handle --doc-for: generate full documentation for a symbol
+    if args.doc_for:
+        from codebase_index.analyzers.doc_generator import generate_doc_for_symbol
+
+        root = Path(args.path).resolve()
+        doc_result = generate_doc_for_symbol(result, args.doc_for, root=root)
+
+        # Print markdown to stdout (can be piped to file or pager)
+        print(doc_result.get("markdown", ""))
         return
 
     # Handle --build-embeddings: generate embeddings for semantic search

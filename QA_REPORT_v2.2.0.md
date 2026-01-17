@@ -422,13 +422,8 @@ Tested on `agent_factory.py`:
 | ~~LLM summaries not linked~~ | ~~Medium~~ | **FIXED** ✅ |
 | ~~Semantic search threshold~~ | ~~Low~~ | **FIXED** ✅ (--search-threshold flag added) |
 | ~~Staleness shows index file~~ | ~~Low~~ | **FIXED** ✅ (filters out *_index.json) |
-| Incremental update over-scans | Low | ⚠️ Partial fix (see below) |
+| ~~Incremental update over-scans~~ | ~~Low~~ | **FIXED** ✅ (respects config exclusions) |
 | TypeScript symbol extraction | Medium | Remaining |
-
-**Incremental Update Details:**
-- ✅ Now filters by supported extensions (.py, .ts, .tsx, etc.)
-- ❌ Does NOT respect config `exclude.directories` during `--update`
-- Result: Adds 359 files from `.archive/`, `docs/third-party/` even with `--config` flag
 
 ---
 
@@ -460,6 +455,12 @@ codebase-index --load index.json --search "Add user_id column" --search-threshol
 ```bash
 codebase-index --load index.json --check
 # Result: codebase_index.json no longer appears as "new file"
+```
+
+**6. Incremental update respects config exclusions:**
+```bash
+codebase-index --load index.json --config config.yaml --update -o updated.json
+# Result: 275 files → 275 files (no spurious additions from .archive/, docs/third-party/)
 ```
 
 ---
