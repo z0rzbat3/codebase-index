@@ -20,6 +20,8 @@ import json
 import logging
 import os
 import re
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -68,13 +70,28 @@ PROVIDERS = {
     },
 }
 
-# Prompt template
+# Prompt templates
 SUMMARY_PROMPT = """Summarize what this function does in ONE concise sentence (max 15 words). Focus on the primary purpose, not implementation details. Do not start with "This function" or "The function".
 
 Function:
 ```{language}
 {code}
 ```
+
+Summary:"""
+
+CLASS_SUMMARY_PROMPT = """Summarize what this class does in ONE concise sentence (max 15 words). Focus on its responsibility/purpose. Do not start with "This class" or "The class".
+
+Class:
+```{language}
+{code}
+```
+
+Summary:"""
+
+FILE_SUMMARY_PROMPT = """Summarize what this file does in ONE concise sentence (max 15 words). Focus on its purpose/responsibility.
+
+{content}
 
 Summary:"""
 
@@ -168,28 +185,39 @@ class SummaryGenerator:
         index_data: dict[str, Any],
         root: Path,
         force: bool = False,
+        workers: int = 4,
+        levels: set[str] | None = None,
     ) -> dict[str, Any]:
         """
-        Generate summaries for all functions in the index.
+        Generate summaries for symbols in the index.
 
         Args:
             index_data: The codebase index data.
             root: Root directory of the codebase.
             force: If True, regenerate all summaries (ignore cache).
+            workers: Number of parallel workers for API calls.
+            levels: Summary levels: functions, classes, files.
 
         Returns:
             Dictionary with summary statistics and cache.
         """
+        if levels is None:
+            levels = {"functions"}
+
         stats = {
             "generated": 0,
             "cached": 0,
             "skipped": 0,
             "errors": 0,
         }
+        stats_lock = threading.Lock()
 
-        # Process each file
+        # Task types: (type, target_dict, source_lines, language, extra_context)
+        tasks: list[tuple[str, dict[str, Any], list[str], str, str | None]] = []
+
         for file_info in index_data.get("files", []):
             file_path = root / file_info.get("path", "")
+            rel_path = file_info.get("path", "")
             language = file_info.get("language", "unknown")
             exports = file_info.get("exports", {})
 
@@ -198,19 +226,53 @@ class SummaryGenerator:
             if not source_lines:
                 continue
 
-            # Process functions
-            for func in exports.get("functions", []):
-                self._generate_symbol_summary(
-                    func, source_lines, language, force, stats
-                )
+            # File-level summaries
+            if "files" in levels:
+                tasks.append(("file", file_info, source_lines, language, rel_path))
 
-            # Process class methods
-            for cls in exports.get("classes", []):
-                for method in cls.get("methods", []):
-                    self._generate_symbol_summary(
-                        method, source_lines, language, force, stats,
-                        class_name=cls.get("name")
-                    )
+            # Class-level summaries
+            if "classes" in levels:
+                for cls in exports.get("classes", []):
+                    tasks.append(("class", cls, source_lines, language, None))
+
+            # Function/method summaries
+            if "functions" in levels:
+                # Collect functions
+                for func in exports.get("functions", []):
+                    tasks.append(("function", func, source_lines, language, None))
+
+                # Collect class methods
+                for cls in exports.get("classes", []):
+                    for method in cls.get("methods", []):
+                        tasks.append(("method", method, source_lines, language, cls.get("name")))
+
+        if not tasks:
+            return {
+                "stats": stats,
+                "cache": self._cache,
+                "model": self.model,
+                "provider": self.provider,
+            }
+
+        # Process tasks in parallel
+        def process_task(task: tuple[str, dict[str, Any], list[str], str, str | None]) -> None:
+            task_type, target, source_lines, language, extra = task
+            if task_type == "file":
+                self._generate_file_summary(target, source_lines, language, force, stats, stats_lock)
+            elif task_type == "class":
+                self._generate_class_summary(target, source_lines, language, force, stats, stats_lock)
+            else:  # function or method
+                self._generate_symbol_summary(target, source_lines, language, force, stats, stats_lock, extra)
+
+        with ThreadPoolExecutor(max_workers=workers) as executor:
+            futures = [executor.submit(process_task, task) for task in tasks]
+            for future in as_completed(futures):
+                try:
+                    future.result()
+                except Exception as e:
+                    logger.error("Error processing symbol: %s", e)
+                    with stats_lock:
+                        stats["errors"] += 1
 
         return {
             "stats": stats,
@@ -226,15 +288,17 @@ class SummaryGenerator:
         language: str,
         force: bool,
         stats: dict[str, int],
+        stats_lock: threading.Lock,
         class_name: str | None = None,
     ) -> None:
-        """Generate summary for a single symbol."""
+        """Generate summary for a single symbol (thread-safe)."""
         name = symbol.get("name", "")
         line = symbol.get("line", 0)
 
         # Skip dunder methods
         if name.startswith("__") and name.endswith("__"):
-            stats["skipped"] += 1
+            with stats_lock:
+                stats["skipped"] += 1
             return
 
         # Skip if already has a good docstring
@@ -242,34 +306,187 @@ class SummaryGenerator:
         if docstring and len(docstring) > 10 and not force:
             symbol["summary"] = docstring.split("\n")[0][:100]
             symbol["summary_source"] = "docstring"
-            stats["skipped"] += 1
+            with stats_lock:
+                stats["skipped"] += 1
             return
 
         # Extract code snippet
         code = self._extract_code(source_lines, line, max_lines=30)
         if not code:
-            stats["skipped"] += 1
+            with stats_lock:
+                stats["skipped"] += 1
             return
 
         # Check cache
         code_hash = hashlib.sha256(code.encode()).hexdigest()[:16]
 
-        if not force and code_hash in self._cache:
-            symbol["summary"] = self._cache[code_hash]
-            symbol["summary_source"] = "cached"
-            stats["cached"] += 1
-            return
+        with stats_lock:
+            if not force and code_hash in self._cache:
+                symbol["summary"] = self._cache[code_hash]
+                symbol["summary_source"] = "cached"
+                stats["cached"] += 1
+                return
 
-        # Generate summary
+        # Generate summary (LLM call - not locked)
         try:
             summary = self._call_llm(code, language)
             symbol["summary"] = summary
             symbol["summary_source"] = "generated"
-            self._cache[code_hash] = summary
-            stats["generated"] += 1
+            with stats_lock:
+                self._cache[code_hash] = summary
+                stats["generated"] += 1
         except Exception as e:
             logger.warning("Error generating summary for %s: %s", name, e)
-            stats["errors"] += 1
+            with stats_lock:
+                stats["errors"] += 1
+
+    def _generate_file_summary(
+        self,
+        file_info: dict[str, Any],
+        source_lines: list[str],
+        language: str,
+        force: bool,
+        stats: dict[str, int],
+        stats_lock: threading.Lock,
+    ) -> None:
+        """Generate summary for an entire file (thread-safe)."""
+        rel_path = file_info.get("path", "")
+
+        # Build a representation of the file for summarization
+        # Include: imports, class names, function names, first ~50 lines
+        exports = file_info.get("exports", {})
+
+        # Gather structural info
+        class_names = [c.get("name", "") for c in exports.get("classes", [])]
+        func_names = [f.get("name", "") for f in exports.get("functions", [])]
+
+        # Build context string
+        context_parts = []
+        if class_names:
+            context_parts.append(f"Classes: {', '.join(class_names[:10])}")
+        if func_names:
+            context_parts.append(f"Functions: {', '.join(func_names[:10])}")
+
+        # Get first ~50 lines of code
+        code_preview = "".join(source_lines[:50])
+
+        # Combine for summarization
+        content = f"File: {rel_path}\n"
+        if context_parts:
+            content += "\n".join(context_parts) + "\n\n"
+        content += code_preview
+
+        # Check cache
+        code_hash = hashlib.sha256(content.encode()).hexdigest()[:16]
+
+        with stats_lock:
+            if not force and code_hash in self._cache:
+                file_info["summary"] = self._cache[code_hash]
+                file_info["summary_source"] = "cached"
+                stats["cached"] += 1
+                return
+
+        # Generate summary
+        try:
+            prompt = FILE_SUMMARY_PROMPT.format(content=content)
+            summary = self._call_llm_raw(prompt)
+            file_info["summary"] = summary
+            file_info["summary_source"] = "generated"
+            with stats_lock:
+                self._cache[code_hash] = summary
+                stats["generated"] += 1
+        except Exception as e:
+            logger.warning("Error generating file summary for %s: %s", rel_path, e)
+            with stats_lock:
+                stats["errors"] += 1
+
+    def _generate_class_summary(
+        self,
+        cls: dict[str, Any],
+        source_lines: list[str],
+        language: str,
+        force: bool,
+        stats: dict[str, int],
+        stats_lock: threading.Lock,
+    ) -> None:
+        """Generate summary for a class (thread-safe)."""
+        name = cls.get("name", "")
+        line = cls.get("line", 0)
+
+        # Get class code (including methods)
+        code = self._extract_class_code(source_lines, line, max_lines=60)
+        if not code:
+            with stats_lock:
+                stats["skipped"] += 1
+            return
+
+        # Check cache
+        code_hash = hashlib.sha256(code.encode()).hexdigest()[:16]
+
+        with stats_lock:
+            if not force and code_hash in self._cache:
+                cls["summary"] = self._cache[code_hash]
+                cls["summary_source"] = "cached"
+                stats["cached"] += 1
+                return
+
+        # Generate summary
+        try:
+            summary = self._call_llm(code, language, is_class=True)
+            cls["summary"] = summary
+            cls["summary_source"] = "generated"
+            with stats_lock:
+                self._cache[code_hash] = summary
+                stats["generated"] += 1
+        except Exception as e:
+            logger.warning("Error generating class summary for %s: %s", name, e)
+            with stats_lock:
+                stats["errors"] += 1
+
+    def _extract_class_code(
+        self,
+        lines: list[str],
+        start_line: int,
+        max_lines: int = 60,
+    ) -> str:
+        """Extract class code starting from a line."""
+        if not lines or start_line < 1:
+            return ""
+
+        start_idx = start_line - 1
+        if start_idx >= len(lines):
+            return ""
+
+        # Find class definition and body
+        code_lines = []
+        base_indent = None
+
+        for i, line in enumerate(lines[start_idx:]):
+            if i >= max_lines:
+                break
+
+            stripped = line.lstrip()
+            if not stripped:
+                code_lines.append(line)
+                continue
+
+            current_indent = len(line) - len(stripped)
+
+            # First line - capture the class definition
+            if base_indent is None:
+                if stripped.startswith("class "):
+                    base_indent = current_indent
+                    code_lines.append(line)
+                continue
+
+            # Stop if we hit something at same or lower indent (new class/function)
+            if current_indent <= base_indent and stripped and not stripped.startswith(("#", "@", "\"\"\"", "'''")):
+                if stripped.startswith(("class ", "def ", "async def ")):
+                    break
+
+            code_lines.append(line)
+
+        return "".join(code_lines).strip()
 
     def _read_file(self, file_path: Path) -> list[str]:
         """Read file content as lines."""
@@ -321,10 +538,17 @@ class SummaryGenerator:
 
         return "".join(result_lines).strip()
 
-    def _call_llm(self, code: str, language: str) -> str:
+    def _call_llm(self, code: str, language: str, is_class: bool = False) -> str:
         """Call the LLM to generate a summary."""
-        prompt = SUMMARY_PROMPT.format(language=language, code=code)
+        if is_class:
+            prompt = CLASS_SUMMARY_PROMPT.format(language=language, code=code)
+        else:
+            prompt = SUMMARY_PROMPT.format(language=language, code=code)
 
+        return self._call_llm_raw(prompt)
+
+    def _call_llm_raw(self, prompt: str) -> str:
+        """Call the LLM with a raw prompt."""
         if self.provider == "anthropic":
             return self._call_anthropic(prompt)
         else:
@@ -383,6 +607,8 @@ def generate_summaries(
     provider: str | None = None,
     model: str | None = None,
     api_key: str | None = None,
+    workers: int = 4,
+    levels: set[str] | None = None,
 ) -> dict[str, Any]:
     """
     Convenience function to generate summaries.
@@ -394,17 +620,22 @@ def generate_summaries(
         provider: API provider (openrouter, anthropic, openai).
         model: Model to use.
         api_key: API key (alternative to environment variable).
+        workers: Number of parallel workers for API calls.
+        levels: Summary levels to generate: functions, classes, files.
 
     Returns:
         Updated index with summaries and cache.
     """
+    if levels is None:
+        levels = {"functions"}
+
     # Load existing cache if present
     existing_cache = index_data.get("summaries", {}).get("cache", {})
 
     generator = SummaryGenerator(provider=provider, model=model, api_key=api_key)
     generator.load_cache(existing_cache)
 
-    result = generator.generate_summaries(index_data, root, force=force)
+    result = generator.generate_summaries(index_data, root, force=force, workers=workers, levels=levels)
 
     # Store in index
     index_data["summaries"] = {

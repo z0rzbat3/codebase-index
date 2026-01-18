@@ -185,6 +185,12 @@ class SemanticSearcher:
             exports = file_info.get("exports", {})
             source_lines = file_contents.get(file_path, [])
 
+            # File-level summary (if available)
+            if file_info.get("summary"):
+                file_symbol = self._create_file_symbol_info(file_info, source_lines)
+                self._symbols.append(file_symbol)
+                texts.append(file_symbol["text"])
+
             # Functions
             for func in exports.get("functions", []):
                 symbol_info = self._create_symbol_info(
@@ -231,6 +237,45 @@ class SemanticSearcher:
             "model": self.model_name,
             "model_key": self.model_key,
             "count": len(self._symbols),
+        }
+
+    def _create_file_symbol_info(
+        self,
+        file_info: dict[str, Any],
+        source_lines: list[str],
+    ) -> dict[str, Any]:
+        """Create file-level symbol info for embedding."""
+        file_path = file_info.get("path", "")
+        summary = file_info.get("summary", "")
+
+        # Build text for embedding: file path + summary + first lines of file
+        text_parts = [file_path]
+
+        if summary:
+            text_parts.append(summary)
+
+        # Add first N lines of file for context
+        if source_lines:
+            preview = "".join(source_lines[:30]).strip()
+            if preview:
+                text_parts.append(preview)
+
+        full_text = " ".join(text_parts)
+
+        # Truncate to model's max length
+        max_chars = self.max_tokens * 4
+        if len(full_text) > max_chars:
+            full_text = full_text[:max_chars]
+
+        return {
+            "name": file_path,
+            "type": "file",
+            "file": file_path,
+            "line": 1,
+            "text": full_text,
+            "summary": summary,
+            "docstring": "",
+            "code_preview": "".join(source_lines[:10])[:200] if source_lines else "",
         }
 
     def _create_symbol_info(

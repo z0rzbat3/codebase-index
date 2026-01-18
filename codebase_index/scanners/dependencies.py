@@ -104,27 +104,83 @@ class DependenciesScanner:
             List of package names.
         """
         deps: list[str] = []
+
+        def extract_pkg_name(dep_string: str) -> str | None:
+            """Extract package name from dependency string like 'pkg>=1.0'."""
+            match = re.match(r'^([a-zA-Z0-9_-]+)', dep_string)
+            return match.group(1).lower() if match else None
+
+        try:
+            # Use tomllib (Python 3.11+) or fall back to tomli
+            try:
+                import tomllib
+            except ImportError:
+                try:
+                    import tomli as tomllib  # type: ignore
+                except ImportError:
+                    # Fall back to regex parsing if no TOML library available
+                    return self._parse_pyproject_regex(filepath)
+
+            with open(filepath, "rb") as f:
+                data = tomllib.load(f)
+
+            # Get project name to filter self-references
+            project_name = data.get("project", {}).get("name", "").lower()
+
+            # [project.dependencies]
+            for dep in data.get("project", {}).get("dependencies", []):
+                pkg = extract_pkg_name(dep)
+                if pkg and pkg != project_name:
+                    deps.append(pkg)
+
+            # [project.optional-dependencies]
+            optional_deps = data.get("project", {}).get("optional-dependencies", {})
+            for group_deps in optional_deps.values():
+                for dep in group_deps:
+                    pkg = extract_pkg_name(dep)
+                    # Skip self-references like "codebase-index[yaml]"
+                    if pkg and pkg != project_name:
+                        deps.append(pkg)
+
+            # [tool.poetry.dependencies] (Poetry format)
+            poetry_deps = data.get("tool", {}).get("poetry", {}).get("dependencies", {})
+            for pkg_name in poetry_deps:
+                if pkg_name.lower() != "python":
+                    deps.append(pkg_name.lower())
+
+            # [tool.poetry.group.*.dependencies] (Poetry groups)
+            poetry_groups = data.get("tool", {}).get("poetry", {}).get("group", {})
+            for group in poetry_groups.values():
+                for pkg_name in group.get("dependencies", {}):
+                    if pkg_name.lower() != "python":
+                        deps.append(pkg_name.lower())
+
+        except (OSError, IOError) as e:
+            logger.warning("Could not parse %s: %s", filepath, e)
+
+        return deps
+
+    def _parse_pyproject_regex(self, filepath: Path) -> list[str]:
+        """
+        Fallback regex parsing for pyproject.toml when no TOML library is available.
+
+        Args:
+            filepath: Path to pyproject.toml.
+
+        Returns:
+            List of package names.
+        """
+        deps: list[str] = []
         try:
             with open(filepath, "r", encoding="utf-8") as f:
                 content = f.read()
 
-            # Simple regex parsing for dependencies array
-            # Matches: dependencies = ["pkg1", "pkg2>=1.0"]
+            # Match dependencies = ["pkg1", "pkg2>=1.0"]
             match = re.search(r'dependencies\s*=\s*\[(.*?)\]', content, re.DOTALL)
             if match:
                 deps_str = match.group(1)
                 for dep_match in re.finditer(r'"([a-zA-Z0-9_-]+)', deps_str):
                     deps.append(dep_match.group(1).lower())
-
-            # Also check [project.optional-dependencies] and [tool.poetry.dependencies]
-            for dep_match in re.finditer(
-                r'^\s*([a-zA-Z0-9_-]+)\s*=',
-                content,
-                re.MULTILINE,
-            ):
-                name = dep_match.group(1).lower()
-                if name not in ("python", "name", "version", "description"):
-                    deps.append(name)
 
         except (OSError, IOError) as e:
             logger.warning("Could not parse %s: %s", filepath, e)

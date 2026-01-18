@@ -290,6 +290,19 @@ For best results:
         metavar="KEY",
         help="API key for summaries (alternative to environment variable)",
     )
+    advanced_group.add_argument(
+        "--summary-workers",
+        metavar="N",
+        type=int,
+        default=4,
+        help="Number of parallel workers for LLM summary generation (default: 4)",
+    )
+    advanced_group.add_argument(
+        "--summary-level",
+        metavar="LEVELS",
+        default="functions",
+        help="Comma-separated summary levels: functions,classes,files,all (default: functions)",
+    )
 
     # Documentation generation
     docs_group = parser.add_argument_group("Documentation Generation")
@@ -308,7 +321,7 @@ For best results:
         "--doc-layers",
         metavar="LAYERS",
         default="all",
-        help="Comma-separated doc layers: api,modules,reference,architecture or 'all' (default: all)",
+        help="Comma-separated doc layers: api,modules,reference,architecture,health or 'all' (default: all)",
     )
     docs_group.add_argument(
         "--doc-diff",
@@ -692,14 +705,24 @@ def main() -> None:
             sys.exit(1)
 
         force = getattr(args, 'force_summaries', False)
+        workers = getattr(args, 'summary_workers', 4)
+        level_str = getattr(args, 'summary_level', 'functions')
+
+        # Parse summary levels
+        if level_str == 'all':
+            levels = {'functions', 'classes', 'files'}
+        else:
+            levels = set(l.strip() for l in level_str.split(','))
 
         if args.verbose:
             detected_provider = provider or get_available_provider()
             print(f"Generating LLM summaries (provider: {detected_provider})...", file=sys.stderr)
+            print(f"  Workers: {workers}", file=sys.stderr)
+            print(f"  Levels: {', '.join(sorted(levels))}", file=sys.stderr)
             if force:
                 print("  Force mode: regenerating all summaries", file=sys.stderr)
 
-        result = generate_summaries(result, root, force=force, provider=provider, model=model, api_key=api_key)
+        result = generate_summaries(result, root, force=force, provider=provider, model=model, api_key=api_key, workers=workers, levels=levels)
 
         if args.verbose:
             summaries = result.get("summaries", {})
@@ -721,6 +744,7 @@ def main() -> None:
             generate_module_readmes,
             generate_function_reference,
             generate_architecture_docs,
+            generate_health_docs,
         )
 
         output_dir = Path(args.output_dir)
@@ -741,6 +765,7 @@ def main() -> None:
         generate_modules = generate_all or "modules" in layers
         generate_reference = generate_all or "reference" in layers
         generate_architecture = generate_all or "architecture" in layers
+        generate_health = generate_all or "health" in layers
 
         # Generate API reference
         if generate_api:
@@ -777,6 +802,13 @@ def main() -> None:
             generated.append(arch_result)
             if args.verbose:
                 print(f"  Architecture: {arch_result.get('components', 0)} components documented", file=sys.stderr)
+
+        # Generate Health docs (dependencies, complexity, env vars, imports)
+        if generate_health:
+            health_result = generate_health_docs(result, output_dir)
+            generated.append(health_result)
+            if args.verbose:
+                print(f"  Health: {len(health_result.get('files', []))} pages generated", file=sys.stderr)
 
         # Output summary
         summary = {

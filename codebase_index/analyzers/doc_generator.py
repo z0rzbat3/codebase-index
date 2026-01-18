@@ -22,6 +22,58 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# Built-in functions and common patterns to filter from data flow analysis
+BUILTIN_FUNCTIONS = {
+    # Python built-ins
+    "len", "str", "int", "float", "bool", "list", "dict", "set", "tuple",
+    "range", "enumerate", "zip", "map", "filter", "sorted", "reversed",
+    "sum", "min", "max", "abs", "round", "pow", "divmod",
+    "open", "print", "input", "type", "isinstance", "issubclass",
+    "hasattr", "getattr", "setattr", "delattr", "callable",
+    "iter", "next", "repr", "format", "hash", "id", "hex", "oct", "bin",
+    "ord", "chr", "bytes", "bytearray", "memoryview",
+    "all", "any", "dir", "vars", "locals", "globals", "eval", "exec",
+    "compile", "super", "object", "classmethod", "staticmethod", "property",
+    # Common method calls to filter
+    "append", "extend", "insert", "remove", "pop", "clear", "copy",
+    "get", "keys", "values", "items", "update", "setdefault",
+    "add", "discard", "union", "intersection", "difference",
+    "join", "split", "strip", "replace", "find", "startswith", "endswith",
+    "lower", "upper", "title", "format", "encode", "decode",
+    "read", "write", "close", "seek", "tell", "flush",
+    # Common attribute access patterns
+    "self", "cls",
+    # Standard library modules/classes
+    "Path", "PurePath", "pathlib",
+    "re", "match", "search", "findall", "finditer", "sub", "compile",
+    "os", "sys", "io", "json", "yaml", "csv", "xml",
+    "datetime", "date", "time", "timedelta",
+    "collections", "itertools", "functools",
+    "typing", "Any", "Optional", "Union", "List", "Dict", "Set", "Tuple",
+    "logging", "logger", "debug", "info", "warning", "error", "critical",
+    "hashlib", "sha256", "md5",
+    "ast", "parse", "walk", "NodeVisitor",
+    "argparse", "ArgumentParser",
+    "threading", "Lock", "Thread",
+    "concurrent", "futures", "ThreadPoolExecutor",
+    "subprocess", "Popen",
+    "urllib", "requests",
+    "Exception", "ValueError", "TypeError", "KeyError", "IndexError", "AttributeError",
+}
+
+# Patterns that indicate non-meaningful calls (method calls on objects)
+FILTER_PATTERNS = {
+    ".get", ".append", ".extend", ".add", ".update", ".pop", ".remove",
+    ".read", ".write", ".close", ".encode", ".decode",
+    ".split", ".join", ".strip", ".replace", ".format",
+    ".keys", ".values", ".items",
+    ".group", ".groups", ".match", ".search", ".findall", ".finditer",
+    ".relative_to", ".exists", ".mkdir", ".is_file", ".is_dir", ".stat",
+    "logger.", "logging.", "log.",
+    "re.", "os.", "sys.", "json.", "yaml.", "ast.",
+    "Path(", "hashlib.", "datetime.",
+}
+
 
 class DocumentationGenerator:
     """
@@ -187,12 +239,26 @@ class DocumentationGenerator:
         """Get functions that call this symbol."""
         callers = []
 
+        # Extract base name for matching (e.g., "Class.method" -> "method", "func" -> "func")
+        base_name = name.split(".")[-1].lower() if "." in name else name.lower()
+
         for func_key, func_data in self.call_graph.items():
             calls_list = func_data.get("calls", [])
 
             # Check if this function calls our symbol
             for call in calls_list:
-                if name.lower() in call.lower() or call.lower() in name.lower():
+                call_lower = call.lower()
+                call_base = call.split(".")[-1].lower() if "." in call else call_lower
+
+                # Match: exact match, or call ends with our name, or base names match
+                is_match = (
+                    call_lower == name.lower() or
+                    call_lower == base_name or
+                    call_base == base_name or
+                    call_lower.endswith("." + base_name)
+                )
+
+                if is_match:
                     # Parse func_key (format: "file:name" or "file:Class.method")
                     if ":" in func_key:
                         caller_file, caller_name = func_key.split(":", 1)
@@ -798,6 +864,15 @@ class APIReferenceGenerator:
         lines.append(f"**Total Endpoints:** {total_endpoints}")
         lines.append("")
 
+        # Handle empty API case
+        if not routers:
+            lines.append("*No API endpoints detected in this project.*")
+            lines.append("")
+            lines.append("This project may not have HTTP API endpoints, or they may use ")
+            lines.append("a framework not currently supported by codebase-index.")
+            lines.append("")
+            return "\n".join(lines)
+
         # Table of routers
         lines.append("## Routers")
         lines.append("")
@@ -950,11 +1025,25 @@ class ModuleREADMEGenerator:
             fname = Path(f.get("path", "")).name
             category = f.get("category", "-")
             line_count = f.get("lines", 0)
-            # Get file summary if available
-            file_hash = f.get("hash", "")
-            summary = self.summaries.get(file_hash, {}).get("summary", "-")
-            if len(summary) > 60:
-                summary = summary[:57] + "..."
+            # Get file summary - check direct field first, then hash lookup, then docstring fallback
+            summary = f.get("summary", "")
+            if not summary:
+                file_hash = f.get("hash", "")
+                summary = self.summaries.get(file_hash, {}).get("summary", "")
+            if not summary:
+                # Fallback: use first class/function docstring as file purpose
+                exports = f.get("exports", {})
+                for cls in exports.get("classes", []):
+                    if cls.get("docstring"):
+                        summary = cls["docstring"].split("\n")[0].strip()
+                        break
+                if not summary:
+                    for func in exports.get("functions", []):
+                        if func.get("docstring"):
+                            summary = func["docstring"].split("\n")[0].strip()
+                            break
+            if not summary:
+                summary = "-"
             lines.append(f"| `{fname}` | {category} | {line_count} | {summary} |")
 
         lines.append("")
@@ -965,12 +1054,10 @@ class ModuleREADMEGenerator:
         if classes:
             lines.append("## Classes")
             lines.append("")
-            for cls in classes[:10]:
+            for cls in classes:  # Show all classes
                 cls_name = cls.get("name", "")
                 cls_summary = cls.get("summary", cls.get("docstring", ""))
                 if cls_summary:
-                    if len(cls_summary) > 100:
-                        cls_summary = cls_summary[:97] + "..."
                     lines.append(f"### {cls_name}")
                     lines.append("")
                     lines.append(cls_summary)
@@ -980,7 +1067,7 @@ class ModuleREADMEGenerator:
                 methods = self._get_methods_for_class(cls_name, module_path)
                 if methods:
                     lines.append("**Methods:**")
-                    for m in methods[:8]:
+                    for m in methods:  # Show all methods
                         m_name = m.get("name", "")
                         # Prefer summary, then docstring first line
                         m_desc = m.get("summary", "")
@@ -988,30 +1075,21 @@ class ModuleREADMEGenerator:
                             docstring = m.get("docstring", "")
                             if docstring:
                                 m_desc = docstring.split("\n")[0].strip()
-                        if m_desc and len(m_desc) > 50:
-                            m_desc = m_desc[:47] + "..."
-                        lines.append(f"- `{m_name}()` - {m_desc or 'No description'}")
-                    if len(methods) > 8:
-                        lines.append(f"- ... and {len(methods) - 8} more")
+                        # For __init__, provide a sensible default
+                        if not m_desc and m_name == "__init__":
+                            m_desc = f"Initialize {cls_name}"
+                        lines.append(f"- `{m_name}()` - {m_desc or '-'}")
                     lines.append("")
-
-            if len(classes) > 10:
-                lines.append(f"*... and {len(classes) - 10} more classes*")
-                lines.append("")
 
         if functions:
             lines.append("## Functions")
             lines.append("")
             lines.append("| Function | Description |")
             lines.append("|----------|-------------|")
-            for func in functions[:15]:
+            for func in functions:  # Show all functions
                 func_name = func.get("name", "")
                 func_summary = func.get("summary", func.get("docstring", "-"))
-                if func_summary and len(func_summary) > 60:
-                    func_summary = func_summary[:57] + "..."
                 lines.append(f"| `{func_name}()` | {func_summary or '-'} |")
-            if len(functions) > 15:
-                lines.append(f"| ... | *{len(functions) - 15} more functions* |")
             lines.append("")
 
         # Dependencies
@@ -1043,11 +1121,15 @@ class ModuleREADMEGenerator:
         """Generate a module summary from file summaries."""
         summaries = []
         for f in files:
-            file_hash = f.get("hash", "")
-            if file_hash and file_hash in self.summaries:
-                summary = self.summaries[file_hash].get("summary", "")
-                if summary:
-                    summaries.append(summary)
+            # Check direct summary field first
+            summary = f.get("summary", "")
+            if not summary:
+                # Fall back to hash lookup
+                file_hash = f.get("hash", "")
+                if file_hash and file_hash in self.summaries:
+                    summary = self.summaries[file_hash].get("summary", "")
+            if summary:
+                summaries.append(summary)
 
         if not summaries:
             return ""
@@ -1546,11 +1628,25 @@ class FunctionReferenceGenerator:
         """Get functions that call this symbol."""
         callers = []
 
+        # Extract base name for matching
+        base_name = name.split(".")[-1].lower() if "." in name else name.lower()
+
         for func_key, func_data in self.call_graph.items():
             calls_list = func_data.get("calls", [])
 
             for call in calls_list:
-                if name.lower() in call.lower():
+                call_lower = call.lower()
+                call_base = call.split(".")[-1].lower() if "." in call else call_lower
+
+                # Match: exact match, or call ends with our name, or base names match
+                is_match = (
+                    call_lower == name.lower() or
+                    call_lower == base_name or
+                    call_base == base_name or
+                    call_lower.endswith("." + base_name)
+                )
+
+                if is_match:
                     if ":" in func_key:
                         caller_file, caller_name = func_key.split(":", 1)
                     else:
@@ -1988,7 +2084,7 @@ class ArchitectureGenerator:
                     "files": [],
                     "classes": [],
                     "functions": [],
-                    "coupling_score": 0,
+                    "coupling_score": None,  # None = not calculated, 0 = calculated as 0
                 }
 
             components[comp_name]["files"].append(f)
@@ -2044,22 +2140,37 @@ class ArchitectureGenerator:
         lines.append("")
         lines.append(f"- **Total Files:** {summary.get('total_files', 0)}")
         lines.append(f"- **Total Lines:** {summary.get('total_lines', 0):,}")
-        lines.append(f"- **Languages:** {', '.join(summary.get('languages', {}).keys())}")
+        languages = list(summary.get('by_language', {}).keys())
+        if languages:
+            lines.append(f"- **Languages:** {', '.join(languages)}")
+        else:
+            lines.append("- **Languages:** Not detected")
         lines.append("")
 
         # Component overview
         lines.append("## Components")
         lines.append("")
-        lines.append("| Component | Files | Classes | Functions | Coupling |")
-        lines.append("|-----------|-------|---------|-----------|----------|")
+
+        # Check if any component has coupling data
+        has_coupling = any(comp["coupling_score"] is not None for comp in components)
+
+        if has_coupling:
+            lines.append("| Component | Files | Classes | Functions | Coupling |")
+            lines.append("|-----------|-------|---------|-----------|----------|")
+        else:
+            lines.append("| Component | Files | Classes | Functions |")
+            lines.append("|-----------|-------|---------|-----------|")
 
         for comp in components[:15]:
             name = comp["name"]
             files = len(comp["files"])
             classes = len(comp["classes"])
             functions = len(comp["functions"])
-            coupling = f"{comp['coupling_score']:.2f}" if comp["coupling_score"] else "-"
-            lines.append(f"| `{name}` | {files} | {classes} | {functions} | {coupling} |")
+            if has_coupling:
+                coupling = f"{comp['coupling_score']:.2f}" if comp["coupling_score"] is not None else "-"
+                lines.append(f"| `{name}` | {files} | {classes} | {functions} | {coupling} |")
+            else:
+                lines.append(f"| `{name}` | {files} | {classes} | {functions} |")
 
         lines.append("")
 
@@ -2201,7 +2312,7 @@ class ArchitectureGenerator:
         lines.append(f"- **Files:** {len(component['files'])}")
         lines.append(f"- **Classes:** {len(component['classes'])}")
         lines.append(f"- **Functions:** {len(component['functions'])}")
-        if component["coupling_score"]:
+        if component["coupling_score"] is not None:
             lines.append(f"- **Coupling Score:** {component['coupling_score']:.2f}")
         lines.append("")
 
@@ -2265,12 +2376,13 @@ class ArchitectureGenerator:
         lines.append("")
 
         # Identify entry points (functions with many callers)
-        entry_points = []
         caller_counts: dict[str, int] = {}
 
         for func_key, func_data in self.call_graph.items():
             for call in func_data.get("calls", []):
-                caller_counts[call] = caller_counts.get(call, 0) + 1
+                # Filter out built-ins and common patterns
+                if self._is_meaningful_function(call):
+                    caller_counts[call] = caller_counts.get(call, 0) + 1
 
         # Sort by caller count
         sorted_functions = sorted(caller_counts.items(), key=lambda x: x[1], reverse=True)
@@ -2281,8 +2393,12 @@ class ArchitectureGenerator:
         lines.append("")
         lines.append("| Function | Times Called |")
         lines.append("|----------|--------------|")
-        for func_name, count in sorted_functions[:20]:
+        shown = 0
+        for func_name, count in sorted_functions:
+            if shown >= 20:
+                break
             lines.append(f"| `{func_name}` | {count} |")
+            shown += 1
         lines.append("")
 
         # Identify call chains
@@ -2307,50 +2423,117 @@ class ArchitectureGenerator:
         """Find interesting call chains from the call graph."""
         chains = []
 
-        # Start from functions that have calls but few callers
+        # Build a mapping of function names to their call graph keys
+        func_name_to_key: dict[str, str] = {}
+        for func_key in self.call_graph:
+            # Extract function name from key (format: "file:func" or just "func")
+            func_name = func_key.split(":")[-1] if ":" in func_key else func_key
+            if self._is_meaningful_function(func_name):
+                func_name_to_key[func_name] = func_key
+
+        # Use BFS to find longer chains - try all paths
+        def build_chain(start_name: str, start_calls: list[str]) -> list[str]:
+            """Build the longest possible chain from a starting function."""
+            best_chain = [start_name]
+            queue = [(start_name, start_calls, [start_name])]
+
+            while queue:
+                current_name, current_calls, current_chain = queue.pop(0)
+
+                if len(current_chain) >= max_depth:
+                    if len(current_chain) > len(best_chain):
+                        best_chain = current_chain[:]
+                    continue
+
+                found_next = False
+                for call in current_calls:
+                    if call in func_name_to_key and call not in current_chain:
+                        next_key = func_name_to_key[call]
+                        next_data = self.call_graph.get(next_key, {})
+                        next_calls = [c for c in next_data.get("calls", [])
+                                      if self._is_meaningful_function(c)]
+                        new_chain = current_chain + [call]
+
+                        if len(new_chain) > len(best_chain):
+                            best_chain = new_chain[:]
+
+                        # Continue exploring (limit branching to avoid explosion)
+                        if len(queue) < 100:
+                            queue.append((call, next_calls, new_chain))
+                        found_next = True
+
+                if not found_next and len(current_chain) > len(best_chain):
+                    best_chain = current_chain[:]
+
+            return best_chain
+
+        # Find entry points - functions with many calls but rarely called
         starters = []
         for func_key, func_data in self.call_graph.items():
-            calls = func_data.get("calls", [])
-            if len(calls) >= 2:
-                # Check if this function is rarely called
+            func_name = func_key.split(":")[-1] if ":" in func_key else func_key
+            if not self._is_meaningful_function(func_name):
+                continue
+
+            calls = [c for c in func_data.get("calls", []) if self._is_meaningful_function(c)]
+            calls_in_graph = [c for c in calls if c in func_name_to_key]
+
+            if len(calls_in_graph) >= 2:
+                # Check if rarely called
                 is_rarely_called = True
                 for other_key, other_data in self.call_graph.items():
-                    if func_key in other_data.get("calls", []):
+                    other_calls = other_data.get("calls", [])
+                    if func_name in other_calls or func_key in other_calls:
                         is_rarely_called = False
                         break
                 if is_rarely_called:
-                    starters.append((func_key, calls))
+                    starters.append((func_name, calls_in_graph, len(calls_in_graph)))
 
-        # Build chains from starters
-        for func_key, calls in starters[:10]:
-            chain = [func_key.split(":")[-1] if ":" in func_key else func_key]
-            current_calls = calls
+        # Sort by number of meaningful calls (more calls = more interesting)
+        starters.sort(key=lambda x: -x[2])
 
-            for _ in range(max_depth - 1):
-                if not current_calls:
-                    break
-                # Pick first call that exists in call graph
-                next_call = None
-                for call in current_calls:
-                    for other_key in self.call_graph:
-                        if call in other_key:
-                            next_call = call
-                            current_calls = self.call_graph[other_key].get("calls", [])
-                            break
-                    if next_call:
-                        break
-
-                if next_call:
-                    chain.append(next_call)
-                else:
-                    if current_calls:
-                        chain.append(current_calls[0])
-                    break
-
-            if len(chain) >= 3:
+        # Build chains from top starters
+        seen_chains = set()
+        for func_name, calls, _ in starters[:20]:
+            chain = build_chain(func_name, calls)
+            chain_key = " → ".join(chain)
+            if len(chain) >= 2 and chain_key not in seen_chains:
                 chains.append(chain)
+                seen_chains.add(chain_key)
+                if len(chains) >= 5:
+                    break
 
         return chains
+
+    def _is_meaningful_function(self, func_name: str) -> bool:
+        """Check if a function name is meaningful (not a built-in or common pattern)."""
+        if not func_name:
+            return False
+
+        # Get base name (after last dot)
+        base_name = func_name.split(".")[-1] if "." in func_name else func_name
+
+        # Filter built-ins
+        if base_name in BUILTIN_FUNCTIONS:
+            return False
+
+        # Filter common patterns like obj.get, list.append, etc.
+        for pattern in FILTER_PATTERNS:
+            if pattern in func_name:
+                return False
+
+        # Filter calls that look like attribute access (e.g., "file_info.get", "result[...].append")
+        if "[" in func_name or "]" in func_name:
+            return False
+
+        # Filter very short names (likely variables or simple calls)
+        if len(base_name) <= 2:
+            return False
+
+        # Filter names that are all lowercase and short (likely common methods)
+        if base_name.islower() and len(base_name) <= 4 and base_name not in {"main", "init", "scan", "run", "load", "save"}:
+            return False
+
+        return True
 
     def _generate_arch_index(self, components: list[dict[str, Any]]) -> str:
         """Generate the architecture index/README file."""
@@ -2408,4 +2591,414 @@ def generate_architecture_docs(
         model=model,
         api_key=api_key,
     )
+    return generator.generate(output_dir)
+
+
+class ProjectHealthGenerator:
+    """
+    Generate project health documentation.
+
+    Creates pages for dependencies, code health, environment variables,
+    and import analysis.
+    """
+
+    def __init__(self, index_data: dict[str, Any]) -> None:
+        """Initialize the project health generator."""
+        self.index_data = index_data
+        self.dependencies = index_data.get("dependencies", {})
+        self.import_analysis = index_data.get("import_analysis", {})
+        self.complexity = index_data.get("complexity_warnings", {})
+        self.orphans = index_data.get("orphaned_files", {})
+        self.duplicates = index_data.get("potential_duplicates", [])
+        self.env_vars = index_data.get("environment_variables", {})
+        self.test_coverage = index_data.get("test_coverage", {})
+
+    def generate(self, output_dir: Path) -> dict[str, Any]:
+        """Generate project health documentation."""
+        health_dir = output_dir / "health"
+        health_dir.mkdir(parents=True, exist_ok=True)
+
+        generated_files = []
+
+        # Dependencies page
+        deps_path = health_dir / "dependencies.md"
+        deps_content = self._generate_dependencies_page()
+        with open(deps_path, "w", encoding="utf-8") as f:
+            f.write(deps_content)
+        generated_files.append(str(deps_path))
+
+        # Code health page
+        health_path = health_dir / "code_health.md"
+        health_content = self._generate_code_health_page()
+        with open(health_path, "w", encoding="utf-8") as f:
+            f.write(health_content)
+        generated_files.append(str(health_path))
+
+        # Environment variables page
+        env_path = health_dir / "environment.md"
+        env_content = self._generate_environment_page()
+        with open(env_path, "w", encoding="utf-8") as f:
+            f.write(env_content)
+        generated_files.append(str(env_path))
+
+        # Import analysis page
+        imports_path = health_dir / "imports.md"
+        imports_content = self._generate_imports_page()
+        with open(imports_path, "w", encoding="utf-8") as f:
+            f.write(imports_content)
+        generated_files.append(str(imports_path))
+
+        # Index page
+        index_path = health_dir / "README.md"
+        index_content = self._generate_health_index()
+        with open(index_path, "w", encoding="utf-8") as f:
+            f.write(index_content)
+        generated_files.append(str(index_path))
+
+        return {
+            "layer": "health",
+            "files": generated_files,
+        }
+
+    def _generate_dependencies_page(self) -> str:
+        """Generate dependencies documentation."""
+        lines = []
+        lines.append("# Dependencies")
+        lines.append("")
+        lines.append("Project dependencies and their versions.")
+        lines.append("")
+
+        has_content = False
+
+        # Python dependencies from pyproject.toml/requirements.txt
+        python_deps = self.dependencies.get("python", [])
+        if python_deps and isinstance(python_deps, list):
+            # Filter out self-references and invalid entries
+            valid_deps = [d for d in python_deps if isinstance(d, str) and d.replace("-", "").replace("_", "").isalnum()]
+            if valid_deps:
+                lines.append("## Python Dependencies")
+                lines.append("")
+                lines.append("| Package |")
+                lines.append("|---------|")
+                for dep in sorted(set(valid_deps)):
+                    lines.append(f"| `{dep}` |")
+                lines.append("")
+                has_content = True
+
+        # Node.js dependencies
+        node_deps = self.dependencies.get("node", {})
+        if node_deps:
+            prod_deps = node_deps.get("dependencies", {})
+            dev_deps = node_deps.get("devDependencies", {})
+
+            if prod_deps or dev_deps:
+                lines.append("## Node.js Dependencies")
+                lines.append("")
+
+                if prod_deps:
+                    lines.append("### Production")
+                    lines.append("")
+                    lines.append("| Package | Version |")
+                    lines.append("|---------|---------|")
+                    for name, version in prod_deps.items():
+                        lines.append(f"| `{name}` | {version} |")
+                    lines.append("")
+
+                if dev_deps:
+                    lines.append("### Development")
+                    lines.append("")
+                    lines.append("| Package | Version |")
+                    lines.append("|---------|---------|")
+                    for name, version in dev_deps.items():
+                        lines.append(f"| `{name}` | {version} |")
+                    lines.append("")
+
+                has_content = True
+
+        if not has_content:
+            lines.append("*No dependencies detected.*")
+            lines.append("")
+
+        return "\n".join(lines)
+
+    def _generate_code_health_page(self) -> str:
+        """Generate code health documentation."""
+        lines = []
+        lines.append("# Code Health")
+        lines.append("")
+        lines.append("Analysis of code quality issues including complexity, duplicates, and unused files.")
+        lines.append("")
+
+        # Summary
+        complexity_issues = self.complexity.get("issues", [])
+        orphan_files = self.orphans.get("orphaned", [])
+        duplicate_groups = self.duplicates
+
+        lines.append("## Summary")
+        lines.append("")
+        lines.append(f"- **Complexity Issues:** {len(complexity_issues)}")
+        lines.append(f"- **Orphaned Files:** {len(orphan_files)}")
+        lines.append(f"- **Duplicate Groups:** {len(duplicate_groups)}")
+        lines.append("")
+
+        # Complexity warnings
+        if complexity_issues:
+            lines.append("## Complexity Warnings")
+            lines.append("")
+            lines.append("Files or functions that exceed recommended size thresholds.")
+            lines.append("")
+            lines.append("| File | Issue | Value | Threshold |")
+            lines.append("|------|-------|-------|-----------|")
+            for issue in complexity_issues[:20]:
+                file_path = issue.get("file", "")
+                issue_type = issue.get("type", "")
+                value = issue.get("value", 0)
+                threshold = issue.get("threshold", 0)
+                lines.append(f"| `{file_path}` | {issue_type} | {value} | {threshold} |")
+            if len(complexity_issues) > 20:
+                lines.append(f"| ... | *{len(complexity_issues) - 20} more* | | |")
+            lines.append("")
+
+        # Orphaned files
+        if orphan_files:
+            lines.append("## Orphaned Files")
+            lines.append("")
+            lines.append("Files that are never imported anywhere in the codebase.")
+            lines.append("")
+            lines.append("| File | Lines | Reason |")
+            lines.append("|------|-------|--------|")
+            for orphan in orphan_files[:20]:
+                if isinstance(orphan, dict):
+                    file_path = orphan.get("file", "")
+                    line_count = orphan.get("lines", 0)
+                    reason = orphan.get("reason", "Not imported")
+                else:
+                    file_path = orphan
+                    line_count = "-"
+                    reason = "Not imported"
+                lines.append(f"| `{file_path}` | {line_count} | {reason} |")
+            if len(orphan_files) > 20:
+                lines.append(f"| ... | | *{len(orphan_files) - 20} more* |")
+            lines.append("")
+
+        # Potential duplicates
+        if duplicate_groups:
+            lines.append("## Potential Duplicates")
+            lines.append("")
+            lines.append("Functions with similar signatures that may be duplicated.")
+            lines.append("")
+            for i, group in enumerate(duplicate_groups[:10], 1):
+                lines.append(f"### Group {i}")
+                lines.append("")
+                functions = group.get("functions", [])
+                if functions:
+                    lines.append("| Function | File | Line |")
+                    lines.append("|----------|------|------|")
+                    for func in functions:
+                        name = func.get("name", "")
+                        file_path = func.get("file", "")
+                        line_num = func.get("line", 0)
+                        lines.append(f"| `{name}` | `{file_path}` | {line_num} |")
+                lines.append("")
+            if len(duplicate_groups) > 10:
+                lines.append(f"*... and {len(duplicate_groups) - 10} more groups*")
+                lines.append("")
+
+        # Test coverage summary
+        coverage = self.test_coverage
+        if coverage:
+            covered = coverage.get("covered", [])
+            uncovered = coverage.get("uncovered", [])
+            coverage_pct = coverage.get("coverage_percentage", 0)
+
+            lines.append("## Test Coverage")
+            lines.append("")
+            lines.append(f"- **Coverage:** {coverage_pct:.1f}%")
+            lines.append(f"- **Covered Files:** {len(covered)}")
+            lines.append(f"- **Uncovered Files:** {len(uncovered)}")
+            lines.append("")
+
+            if uncovered:
+                lines.append("### Uncovered Files")
+                lines.append("")
+                for f in uncovered[:10]:
+                    if isinstance(f, dict):
+                        file_path = f.get("source", f.get("file", ""))
+                    else:
+                        file_path = f
+                    lines.append(f"- `{file_path}`")
+                if len(uncovered) > 10:
+                    lines.append(f"- *... and {len(uncovered) - 10} more*")
+                lines.append("")
+
+        return "\n".join(lines)
+
+    def _generate_environment_page(self) -> str:
+        """Generate environment variables documentation."""
+        lines = []
+        lines.append("# Environment Variables")
+        lines.append("")
+        lines.append("Environment variables used by this project.")
+        lines.append("")
+
+        if not self.env_vars:
+            lines.append("*No environment variables detected.*")
+            lines.append("")
+            return "\n".join(lines)
+
+        # Handle the actual data structure: {category: [var_names]} or {category: {file: [vars]}}
+        all_vars: list[tuple[str, str]] = []  # (var_name, source)
+
+        for category, data in self.env_vars.items():
+            if isinstance(data, list):
+                # Format: {"python_usage": ["VAR1", "VAR2"]}
+                for var_name in data:
+                    if isinstance(var_name, str) and var_name.isupper():
+                        all_vars.append((var_name, category))
+            elif isinstance(data, dict):
+                # Format: {"dotenv_files": {"file.env": ["VAR1", "VAR2"]}}
+                for file_path, vars_list in data.items():
+                    if isinstance(vars_list, list):
+                        for var_name in vars_list:
+                            if isinstance(var_name, str):
+                                all_vars.append((var_name, file_path))
+
+        if not all_vars:
+            lines.append("*No environment variables detected.*")
+            lines.append("")
+            return "\n".join(lines)
+
+        # Deduplicate and sort
+        seen = set()
+        unique_vars = []
+        for var_name, source in sorted(all_vars):
+            if var_name not in seen:
+                seen.add(var_name)
+                unique_vars.append((var_name, source))
+
+        lines.append("| Variable | Source |")
+        lines.append("|----------|--------|")
+        for var_name, source in unique_vars:
+            # Clean up source name
+            source_display = source.replace("_usage", "").replace("_", " ").title()
+            lines.append(f"| `{var_name}` | {source_display} |")
+
+        lines.append("")
+        return "\n".join(lines)
+
+    def _generate_imports_page(self) -> str:
+        """Generate import analysis documentation."""
+        lines = []
+        lines.append("# Import Analysis")
+        lines.append("")
+        lines.append("Analysis of imports including missing and unused dependencies.")
+        lines.append("")
+
+        missing = self.import_analysis.get("missing", [])
+        unused = self.import_analysis.get("unused", [])
+        stdlib = self.import_analysis.get("stdlib", [])
+        third_party = self.import_analysis.get("third_party", [])
+
+        # Summary
+        lines.append("## Summary")
+        lines.append("")
+        lines.append(f"- **Missing Dependencies:** {len(missing)}")
+        lines.append(f"- **Unused Dependencies:** {len(unused)}")
+        lines.append(f"- **Standard Library:** {len(stdlib)}")
+        lines.append(f"- **Third Party:** {len(third_party)}")
+        lines.append("")
+
+        # Missing dependencies
+        if missing:
+            lines.append("## Missing Dependencies")
+            lines.append("")
+            lines.append("Packages imported but not declared in requirements/dependencies.")
+            lines.append("")
+            for pkg in missing[:20]:
+                lines.append(f"- `{pkg}`")
+            if len(missing) > 20:
+                lines.append(f"- *... and {len(missing) - 20} more*")
+            lines.append("")
+
+        # Unused dependencies
+        if unused:
+            lines.append("## Unused Dependencies")
+            lines.append("")
+            lines.append("Packages declared but never imported.")
+            lines.append("")
+            for pkg in unused[:20]:
+                lines.append(f"- `{pkg}`")
+            if len(unused) > 20:
+                lines.append(f"- *... and {len(unused) - 20} more*")
+            lines.append("")
+
+        # Third party imports
+        if third_party:
+            lines.append("## Third Party Imports")
+            lines.append("")
+            lines.append("| Package | Import Count |")
+            lines.append("|---------|--------------|")
+            # Count imports
+            counts: dict[str, int] = {}
+            for imp in third_party:
+                pkg = imp.split(".")[0] if isinstance(imp, str) else imp.get("name", "").split(".")[0]
+                counts[pkg] = counts.get(pkg, 0) + 1
+            for pkg, count in sorted(counts.items(), key=lambda x: -x[1])[:20]:
+                lines.append(f"| `{pkg}` | {count} |")
+            lines.append("")
+
+        return "\n".join(lines)
+
+    def _generate_health_index(self) -> str:
+        """Generate the health index/README file."""
+        lines = []
+        lines.append("# Project Health")
+        lines.append("")
+        lines.append("Project health and dependency analysis.")
+        lines.append("")
+
+        # Quick stats
+        complexity_issues = len(self.complexity.get("issues", []))
+        orphan_files = len(self.orphans.get("orphaned", []))
+        duplicate_groups = len(self.duplicates)
+        missing_deps = len(self.import_analysis.get("missing", []))
+        unused_deps = len(self.import_analysis.get("unused", []))
+        env_vars = len(self.env_vars)
+
+        lines.append("## Quick Stats")
+        lines.append("")
+        lines.append(f"- **Complexity Issues:** {complexity_issues}")
+        lines.append(f"- **Orphaned Files:** {orphan_files}")
+        lines.append(f"- **Potential Duplicates:** {duplicate_groups}")
+        lines.append(f"- **Missing Dependencies:** {missing_deps}")
+        lines.append(f"- **Unused Dependencies:** {unused_deps}")
+        lines.append(f"- **Environment Variables:** {env_vars}")
+        lines.append("")
+
+        lines.append("## Documents")
+        lines.append("")
+        lines.append("- [Dependencies](dependencies.md) - Project dependencies")
+        lines.append("- [Code Health](code_health.md) - Complexity, duplicates, orphans")
+        lines.append("- [Environment](environment.md) - Environment variables")
+        lines.append("- [Imports](imports.md) - Import analysis")
+        lines.append("")
+
+        return "\n".join(lines)
+
+
+def generate_health_docs(
+    index_data: dict[str, Any],
+    output_dir: Path,
+) -> dict[str, Any]:
+    """
+    Generate project health documentation.
+
+    Args:
+        index_data: The codebase index.
+        output_dir: Directory to write documentation.
+
+    Returns:
+        Summary of generated files.
+    """
+    generator = ProjectHealthGenerator(index_data)
     return generator.generate(output_dir)
