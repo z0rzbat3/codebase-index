@@ -75,6 +75,180 @@ FILTER_PATTERNS = {
 }
 
 
+class SymbolLinker:
+    """
+    Build cross-links between documentation files.
+
+    Creates a map of symbol names to their documentation locations,
+    enabling markdown links between related symbols across doc layers.
+    """
+
+    def __init__(self, index_data: dict[str, Any]) -> None:
+        """
+        Initialize the symbol linker.
+
+        Args:
+            index_data: The loaded codebase index.
+        """
+        self.index_data = index_data
+        self.symbol_index = index_data.get("symbol_index", {})
+
+        # Map symbol name -> (file_path, anchor_id, doc_file)
+        self._symbol_map: dict[str, dict[str, str]] = {}
+        self._build_symbol_map()
+
+    def _build_symbol_map(self) -> None:
+        """Build the symbol location map."""
+        # Map functions
+        for func in self.symbol_index.get("functions", []):
+            name = func.get("name", "")
+            file_path = func.get("file", "")
+            if name and file_path:
+                doc_file = self._file_to_doc_path(file_path)
+                anchor = self._make_anchor(name)
+                self._symbol_map[name] = {
+                    "file": file_path,
+                    "doc_file": doc_file,
+                    "anchor": anchor,
+                    "type": "function",
+                }
+
+        # Map classes
+        for cls in self.symbol_index.get("classes", []):
+            name = cls.get("name", "")
+            file_path = cls.get("file", "")
+            if name and file_path:
+                doc_file = self._file_to_doc_path(file_path)
+                anchor = self._make_anchor(name)
+                self._symbol_map[name] = {
+                    "file": file_path,
+                    "doc_file": doc_file,
+                    "anchor": anchor,
+                    "type": "class",
+                }
+
+        # Map methods (with Class.method format)
+        for method in self.symbol_index.get("methods", []):
+            name = method.get("name", "")
+            class_name = method.get("class", "")
+            file_path = method.get("file", "")
+            if name and file_path:
+                doc_file = self._file_to_doc_path(file_path)
+                # Store both "method" and "Class.method" forms
+                anchor = self._make_anchor(name)
+                self._symbol_map[name] = {
+                    "file": file_path,
+                    "doc_file": doc_file,
+                    "anchor": anchor,
+                    "type": "method",
+                }
+                if class_name:
+                    full_name = f"{class_name}.{name}"
+                    self._symbol_map[full_name] = {
+                        "file": file_path,
+                        "doc_file": doc_file,
+                        "anchor": self._make_anchor(full_name),
+                        "type": "method",
+                    }
+
+    def _file_to_doc_path(self, file_path: str) -> str:
+        """Convert a source file path to its reference doc path."""
+        safe_name = file_path.replace("/", "_").replace("\\", "_")
+        safe_name = safe_name.replace(".py", "").replace(".ts", "").replace(".js", "")
+        return f"reference/{safe_name}.md"
+
+    def _make_anchor(self, name: str) -> str:
+        """Create a markdown anchor ID for a symbol."""
+        # Lowercase, replace dots with dashes
+        return name.lower().replace(".", "-")
+
+    def get_symbol_info(self, name: str) -> dict[str, str] | None:
+        """Get documentation info for a symbol."""
+        # Try exact match first
+        if name in self._symbol_map:
+            return self._symbol_map[name]
+
+        # Try case-insensitive match
+        name_lower = name.lower()
+        for sym_name, info in self._symbol_map.items():
+            if sym_name.lower() == name_lower:
+                return info
+
+        # Try matching the base name (for method calls like self.method)
+        base_name = name.split(".")[-1] if "." in name else name
+        if base_name != name and base_name in self._symbol_map:
+            return self._symbol_map[base_name]
+
+        return None
+
+    def link_symbol(
+        self,
+        name: str,
+        from_layer: str = "reference",
+        include_file: bool = False,
+    ) -> str:
+        """
+        Generate a markdown link for a symbol.
+
+        Args:
+            name: The symbol name to link.
+            from_layer: The layer this link is from (for relative path calculation).
+            include_file: If True, include "in file.py" after the link.
+
+        Returns:
+            Markdown link string, or plain code text if symbol not found.
+        """
+        info = self.get_symbol_info(name)
+
+        if not info:
+            return f"`{name}`"
+
+        doc_file = info["doc_file"]
+        anchor = info["anchor"]
+        source_file = info["file"]
+
+        # Calculate relative path based on from_layer
+        if from_layer == "reference":
+            # Same directory
+            doc_filename = doc_file.replace("reference/", "")
+            link = f"[`{name}`]({doc_filename}#{anchor})"
+        elif from_layer == "api":
+            # From api/ to reference/
+            link = f"[`{name}`](../{doc_file}#{anchor})"
+        elif from_layer == "modules":
+            # From modules/ to reference/
+            link = f"[`{name}`](../{doc_file}#{anchor})"
+        elif from_layer == "architecture":
+            # From architecture/ to reference/
+            link = f"[`{name}`](../{doc_file}#{anchor})"
+        else:
+            # Default: use full path
+            link = f"[`{name}`]({doc_file}#{anchor})"
+
+        if include_file:
+            link += f" in `{source_file}`"
+
+        return link
+
+    def make_anchor_tag(self, name: str) -> str:
+        """Generate an HTML anchor tag for a symbol."""
+        anchor = self._make_anchor(name)
+        return f'<a id="{anchor}"></a>'
+
+    def get_all_symbols(self) -> list[dict[str, Any]]:
+        """Get all symbols with their locations for index generation."""
+        symbols = []
+        for name, info in sorted(self._symbol_map.items()):
+            symbols.append({
+                "name": name,
+                "type": info["type"],
+                "file": info["file"],
+                "doc_file": info["doc_file"],
+                "anchor": info["anchor"],
+            })
+        return symbols
+
+
 class DocumentationGenerator:
     """
     Generate documentation for code symbols.
@@ -499,6 +673,7 @@ class APIReferenceGenerator:
         self.schemas = index_data.get("schemas", [])
         self.symbol_index = index_data.get("symbol_index", {})
         self.router_prefixes = index_data.get("router_prefixes", {})
+        self.linker = SymbolLinker(index_data)
 
         # Build function lookup for fast description access
         self._func_lookup: dict[tuple[str, str], dict[str, Any]] = {}
@@ -705,9 +880,10 @@ class APIReferenceGenerator:
             lines.append(desc)
             lines.append("")
 
-        # Function name and location
+        # Function name and location (with cross-link to reference)
         if func_name:
-            lines.append(f"**Function:** `{func_name}`")
+            func_link = self.linker.link_symbol(func_name, from_layer="api")
+            lines.append(f"**Function:** {func_link}")
             if file_path and line:
                 lines.append(f"**Location:** `{file_path}:{line}`")
             lines.append("")
@@ -751,24 +927,26 @@ class APIReferenceGenerator:
                     lines.append(f"| `{param}` | `string` | No | - |")
             lines.append("")
 
-        # Request body schema
+        # Request body schema (with cross-link)
         request_schema = endpoint.get("request_schema")
         if request_schema:
             lines.append("**Request Body:**")
             lines.append("")
-            lines.append(f"Schema: `{request_schema}`")
+            schema_link = self.linker.link_symbol(request_schema, from_layer="api")
+            lines.append(f"Schema: {schema_link}")
             lines.append("")
             # Try to find schema details
             schema_info = self._find_schema(request_schema)
             if schema_info:
                 lines.extend(self._format_schema_fields(schema_info))
 
-        # Response schema
+        # Response schema (with cross-link)
         response_schema = endpoint.get("response_schema")
         if response_schema:
             lines.append("**Response:**")
             lines.append("")
-            lines.append(f"Schema: `{response_schema}`")
+            schema_link = self.linker.link_symbol(response_schema, from_layer="api")
+            lines.append(f"Schema: {schema_link}")
             lines.append("")
             schema_info = self._find_schema(response_schema)
             if schema_info:
@@ -783,7 +961,54 @@ class APIReferenceGenerator:
         lines.append("```")
         lines.append("")
 
+        # See Also section
+        see_also = self._build_endpoint_see_also(endpoint)
+        if see_also:
+            lines.append("**See Also:**")
+            lines.append("")
+            for item in see_also:
+                lines.append(f"- {item}")
+            lines.append("")
+
         return lines
+
+    def _build_endpoint_see_also(self, endpoint: dict[str, Any]) -> list[str]:
+        """Build See Also links for an endpoint."""
+        see_also = []
+
+        func_name = endpoint.get("function", "") or endpoint.get("handler", "")
+        request_schema = endpoint.get("request_schema")
+        response_schema = endpoint.get("response_schema")
+        current_path = endpoint.get("path", "")
+
+        # Link to handler function
+        if func_name:
+            link = self.linker.link_symbol(func_name, from_layer="api")
+            see_also.append(f"**Handler:** {link}")
+
+        # Link to schemas
+        if request_schema:
+            link = self.linker.link_symbol(request_schema, from_layer="api")
+            see_also.append(f"**Request Schema:** {link}")
+        if response_schema and response_schema != request_schema:
+            link = self.linker.link_symbol(response_schema, from_layer="api")
+            see_also.append(f"**Response Schema:** {link}")
+
+        # Find related endpoints (same base path)
+        path_parts = current_path.strip("/").split("/")
+        if len(path_parts) >= 2:
+            base_path = "/" + path_parts[0]
+            related = []
+            for ep in self.endpoints:
+                ep_path = ep.get("path", "")
+                if ep_path != current_path and ep_path.startswith(base_path):
+                    method = ep.get("method", "GET").upper()
+                    full_path = ep.get("full_path", ep_path)
+                    related.append(f"`{method} {full_path}`")
+            if related:
+                see_also.append(f"**Related Endpoints:** {', '.join(related[:3])}")
+
+        return see_also
 
     def _find_schema(self, schema_name: str) -> dict[str, Any] | None:
         """Find schema details by name."""
@@ -929,6 +1154,7 @@ class ModuleREADMEGenerator:
         self.symbol_index = index_data.get("symbol_index", {})
         self.call_graph = index_data.get("call_graph", {})
         self.summaries = index_data.get("summaries", {}).get("cache", {})
+        self.linker = SymbolLinker(index_data)
 
     def generate(self, output_dir: Path) -> dict[str, Any]:
         """
@@ -1057,13 +1283,15 @@ class ModuleREADMEGenerator:
             for cls in classes:  # Show all classes
                 cls_name = cls.get("name", "")
                 cls_summary = cls.get("summary", cls.get("docstring", ""))
+                # Link class name to reference docs
+                cls_link = self.linker.link_symbol(cls_name, from_layer="modules")
                 if cls_summary:
-                    lines.append(f"### {cls_name}")
+                    lines.append(f"### {cls_link}")
                     lines.append("")
                     lines.append(cls_summary)
                     lines.append("")
 
-                # List methods
+                # List methods (with cross-links)
                 methods = self._get_methods_for_class(cls_name, module_path)
                 if methods:
                     lines.append("**Methods:**")
@@ -1078,7 +1306,9 @@ class ModuleREADMEGenerator:
                         # For __init__, provide a sensible default
                         if not m_desc and m_name == "__init__":
                             m_desc = f"Initialize {cls_name}"
-                        lines.append(f"- `{m_name}()` - {m_desc or '-'}")
+                        # Link method name to reference docs
+                        m_link = self.linker.link_symbol(f"{cls_name}.{m_name}", from_layer="modules")
+                        lines.append(f"- {m_link} - {m_desc or '-'}")
                     lines.append("")
 
         if functions:
@@ -1089,7 +1319,9 @@ class ModuleREADMEGenerator:
             for func in functions:  # Show all functions
                 func_name = func.get("name", "")
                 func_summary = func.get("summary", func.get("docstring", "-"))
-                lines.append(f"| `{func_name}()` | {func_summary or '-'} |")
+                # Link function name to reference docs
+                func_link = self.linker.link_symbol(func_name, from_layer="modules")
+                lines.append(f"| {func_link} | {func_summary or '-'} |")
             lines.append("")
 
         # Dependencies
@@ -1115,7 +1347,59 @@ class ModuleREADMEGenerator:
                     lines.append(f"- ... and {len(external_deps) - 10} more")
                 lines.append("")
 
+        # See Also section
+        see_also = self._build_module_see_also(module_path, files)
+        if see_also:
+            lines.append("## See Also")
+            lines.append("")
+            for item in see_also:
+                lines.append(f"- {item}")
+            lines.append("")
+
         return "\n".join(lines)
+
+    def _build_module_see_also(
+        self, module_path: str, files: list[dict[str, Any]]
+    ) -> list[str]:
+        """Build See Also links for a module."""
+        see_also = []
+
+        # Link to parent module
+        parent = str(Path(module_path).parent)
+        if parent and parent != "." and parent != module_path:
+            safe_parent = parent.replace("/", "_").replace("\\", "_") or "root"
+            see_also.append(f"**Parent Module:** [{parent}]({safe_parent}.md)")
+
+        # Link to reference docs for files in this module
+        ref_links = []
+        for f in files[:3]:
+            file_path = f.get("path", "")
+            safe_name = file_path.replace("/", "_").replace("\\", "_")
+            safe_name = safe_name.replace(".py", "").replace(".ts", "").replace(".js", "")
+            file_name = Path(file_path).name
+            ref_links.append(f"[{file_name}](../reference/{safe_name}.md)")
+        if ref_links:
+            see_also.append(f"**Reference Docs:** {', '.join(ref_links)}")
+
+        # Link to related modules (siblings)
+        current_parent = str(Path(module_path).parent)
+        sibling_modules = []
+        for other_file in self.files:
+            other_path = other_file.get("path", "")
+            other_parent = str(Path(other_path).parent)
+            if other_parent != module_path and Path(other_parent).parent == Path(current_parent):
+                mod_name = Path(other_parent).name
+                if mod_name and mod_name not in sibling_modules:
+                    sibling_modules.append(mod_name)
+        if sibling_modules:
+            sibling_links = []
+            for sib in sorted(set(sibling_modules))[:3]:
+                safe_sib = f"{current_parent}_{sib}".replace("/", "_").replace("\\", "_")
+                sibling_links.append(f"[{sib}]({safe_sib}.md)")
+            if sibling_links:
+                see_also.append(f"**Related Modules:** {', '.join(sibling_links)}")
+
+        return see_also
 
     def _get_module_summary(self, files: list[dict[str, Any]]) -> str:
         """Generate a module summary from file summaries."""
@@ -1273,6 +1557,8 @@ class FunctionReferenceGenerator:
         self.symbol_index = index_data.get("symbol_index", {})
         self.call_graph = index_data.get("call_graph", {})
         self.test_coverage = index_data.get("test_coverage", {})
+        self.endpoints = index_data.get("api_endpoints", [])
+        self.linker = SymbolLinker(index_data)
 
     def generate(self, output_dir: Path) -> dict[str, Any]:
         """
@@ -1405,8 +1691,11 @@ class FunctionReferenceGenerator:
             lines.append("## Functions")
             lines.append("")
 
+            # Get all functions for similar function detection
+            all_functions = self.symbol_index.get("functions", [])
+
             for func in functions:
-                lines.extend(self._format_function(func, file_path))
+                lines.extend(self._format_function(func, file_path, all_functions))
                 lines.append("---")
                 lines.append("")
 
@@ -1424,12 +1713,16 @@ class FunctionReferenceGenerator:
         summary = cls.get("summary", "")
         bases = cls.get("bases", [])
 
+        # Add anchor for cross-linking
+        lines.append(self.linker.make_anchor_tag(name))
         lines.append(f"### {name}")
         lines.append("")
         lines.append(f"**Location:** `{file_path}:{line_num}`")
 
         if bases:
-            bases_str = ", ".join(f"`{b}`" for b in bases)
+            # Link base classes if they exist in the codebase
+            linked_bases = [self.linker.link_symbol(b, from_layer="reference") for b in bases]
+            bases_str = ", ".join(linked_bases)
             lines.append(f"**Inherits:** {bases_str}")
         lines.append("")
 
@@ -1451,7 +1744,7 @@ class FunctionReferenceGenerator:
             for method in class_methods:
                 lines.extend(self._format_method(method, file_path))
 
-        # Callers
+        # Callers (with cross-links)
         callers = self._get_callers(name, file_path)
         if callers:
             lines.append("#### Used By")
@@ -1459,7 +1752,8 @@ class FunctionReferenceGenerator:
             for caller in callers[:10]:
                 c_name = caller.get("name", "")
                 c_file = caller.get("file", "")
-                lines.append(f"- `{c_name}` in `{c_file}`")
+                link = self.linker.link_symbol(c_name, from_layer="reference")
+                lines.append(f"- {link} in `{c_file}`")
             if len(callers) > 10:
                 lines.append(f"- ... and {len(callers) - 10} more")
             lines.append("")
@@ -1481,11 +1775,16 @@ class FunctionReferenceGenerator:
         lines = []
 
         name = method.get("name", "")
+        class_name = method.get("class", "")
         line_num = method.get("line", 0)
         signature = method.get("signature", {})
         summary = method.get("summary", "")
         docstring = method.get("docstring", "")
 
+        # Add anchor for cross-linking (both method name and Class.method)
+        lines.append(self.linker.make_anchor_tag(name))
+        if class_name:
+            lines.append(self.linker.make_anchor_tag(f"{class_name}.{name}"))
         lines.append(f"##### `{name}()`")
         lines.append("")
 
@@ -1530,7 +1829,12 @@ class FunctionReferenceGenerator:
 
         return lines
 
-    def _format_function(self, func: dict[str, Any], file_path: str) -> list[str]:
+    def _format_function(
+        self,
+        func: dict[str, Any],
+        file_path: str,
+        all_functions: list[dict[str, Any]] | None = None,
+    ) -> list[str]:
         """Format a function as markdown."""
         lines = []
 
@@ -1540,6 +1844,8 @@ class FunctionReferenceGenerator:
         summary = func.get("summary", "")
         docstring = func.get("docstring", "")
 
+        # Add anchor for cross-linking
+        lines.append(self.linker.make_anchor_tag(name))
         lines.append(f"### {name}")
         lines.append("")
         lines.append(f"**Location:** `{file_path}:{line_num}`")
@@ -1581,18 +1887,19 @@ class FunctionReferenceGenerator:
             lines.append(f"**Returns:** `{return_type}`")
             lines.append("")
 
-        # What it calls
+        # What it calls (with cross-links)
         calls = self._get_calls(name, file_path)
         if calls:
             lines.append("**Calls:**")
             lines.append("")
             for call in calls[:10]:
-                lines.append(f"- `{call}`")
+                link = self.linker.link_symbol(call, from_layer="reference")
+                lines.append(f"- {link}")
             if len(calls) > 10:
                 lines.append(f"- ... and {len(calls) - 10} more")
             lines.append("")
 
-        # What calls it
+        # What calls it (with cross-links)
         callers = self._get_callers(name, file_path)
         if callers:
             lines.append("**Called By:**")
@@ -1600,7 +1907,8 @@ class FunctionReferenceGenerator:
             for caller in callers[:10]:
                 c_name = caller.get("name", "")
                 c_file = caller.get("file", "")
-                lines.append(f"- `{c_name}` in `{c_file}`")
+                link = self.linker.link_symbol(c_name, from_layer="reference")
+                lines.append(f"- {link} in `{c_file}`")
             if len(callers) > 10:
                 lines.append(f"- ... and {len(callers) - 10} more")
             lines.append("")
@@ -1615,7 +1923,40 @@ class FunctionReferenceGenerator:
                 lines.append(f"- `{test_file}`")
             lines.append("")
 
+        # See Also section
+        see_also = self._build_see_also(name, file_path, all_functions or [])
+        if see_also:
+            lines.append("**See Also:**")
+            lines.append("")
+            for item in see_also:
+                lines.append(f"- {item}")
+            lines.append("")
+
         return lines
+
+    def _build_see_also(
+        self,
+        name: str,
+        file_path: str,
+        all_functions: list[dict[str, Any]],
+    ) -> list[str]:
+        """Build See Also links for a function."""
+        see_also = []
+
+        # Related endpoints (if this function is an API handler)
+        endpoints = self._get_related_endpoints(name, file_path)
+        for ep in endpoints:
+            method = ep["method"]
+            path = ep["path"]
+            see_also.append(f"**Endpoint:** `{method} {path}`")
+
+        # Similar functions in same file
+        similar = self._get_similar_functions(name, file_path, all_functions)
+        for sim_name in similar:
+            link = self.linker.link_symbol(sim_name, from_layer="reference")
+            see_also.append(f"**Related:** {link}")
+
+        return see_also
 
     def _get_calls(self, name: str, file_path: str) -> list[str]:
         """Get functions that this symbol calls."""
@@ -1675,6 +2016,69 @@ class FunctionReferenceGenerator:
                 tests.append({"file": test_file})
 
         return tests[:10]
+
+    def _get_related_endpoints(self, name: str, file_path: str) -> list[dict[str, Any]]:
+        """Find API endpoints that use this function as a handler."""
+        related = []
+        name_lower = name.lower()
+
+        for ep in self.endpoints:
+            handler = ep.get("function", "") or ep.get("handler", "")
+            ep_file = ep.get("file", "")
+
+            # Match by function name or file
+            if handler.lower() == name_lower or (
+                ep_file == file_path and handler
+            ):
+                related.append({
+                    "method": ep.get("method", "GET").upper(),
+                    "path": ep.get("full_path", ep.get("path", "/")),
+                    "handler": handler,
+                })
+
+        return related[:5]
+
+    def _get_similar_functions(
+        self, name: str, file_path: str, all_functions: list[dict[str, Any]]
+    ) -> list[str]:
+        """Find similar functions in the same file (by naming pattern)."""
+        similar = []
+        name_lower = name.lower()
+
+        # Extract base pattern (e.g., "create" from "create_user")
+        parts = name_lower.split("_")
+        if len(parts) > 1:
+            prefix = parts[0]  # e.g., "create", "get", "update", "delete"
+            suffix = parts[-1]  # e.g., "user", "item", "config"
+        else:
+            prefix = name_lower
+            suffix = ""
+
+        for func in all_functions:
+            func_name = func.get("name", "")
+            func_file = func.get("file", "")
+
+            # Skip self
+            if func_name.lower() == name_lower:
+                continue
+
+            # Must be in same file
+            if func_file != file_path:
+                continue
+
+            func_lower = func_name.lower()
+
+            # Match by prefix (CRUD operations) or suffix (same entity)
+            if prefix in ("create", "get", "update", "delete", "list", "find"):
+                # Look for other CRUD operations on same entity
+                if suffix and suffix in func_lower:
+                    similar.append(func_name)
+            elif suffix and func_lower.endswith(suffix):
+                similar.append(func_name)
+            elif prefix and func_lower.startswith(prefix):
+                similar.append(func_name)
+
+        return similar[:5]
 
     def _generate_reference_index(
         self, modules: dict[str, dict[str, list[dict[str, Any]]]]
@@ -2002,6 +2406,8 @@ class ArchitectureGenerator:
         self.coupling = index_data.get("coupling_analysis", {})
         self.summaries = index_data.get("summaries", {}).get("cache", {})
         self.symbol_index = index_data.get("symbol_index", {})
+        self.execution_flow = index_data.get("execution_flow", {})
+        self.centrality = index_data.get("centrality", {})
 
         self._llm_client = None
 
@@ -2047,6 +2453,22 @@ class ArchitectureGenerator:
         with open(flow_path, "w", encoding="utf-8") as f:
             f.write(flow_content)
         generated_files.append(str(flow_path))
+
+        # Generate execution flow doc (if data available)
+        if self.execution_flow:
+            exec_flow_path = arch_dir / "execution_flow.md"
+            exec_flow_content = self._generate_execution_flow_doc()
+            with open(exec_flow_path, "w", encoding="utf-8") as f:
+                f.write(exec_flow_content)
+            generated_files.append(str(exec_flow_path))
+
+        # Generate core components doc (if centrality data available)
+        if self.centrality:
+            core_path = arch_dir / "core_components.md"
+            core_content = self._generate_core_components_doc()
+            with open(core_path, "w", encoding="utf-8") as f:
+                f.write(core_content)
+            generated_files.append(str(core_path))
 
         # Generate index
         index_path = arch_dir / "README.md"
@@ -2189,6 +2611,60 @@ class ArchitectureGenerator:
         for pattern in patterns:
             lines.append(f"- **{pattern['name']}:** {pattern['description']}")
         lines.append("")
+
+        # Entry points summary (if available)
+        if self.execution_flow:
+            entry_points = self.execution_flow.get("entry_points", [])
+            if entry_points:
+                lines.append("## Entry Points")
+                lines.append("")
+                lines.append("Main entry points into the system:")
+                lines.append("")
+                for ep in entry_points[:5]:
+                    name = ep.get("name", "?")
+                    file_path = ep.get("file", "")
+                    short_file = Path(file_path).name if file_path else ""
+                    reason = ep.get("reason", "")
+                    lines.append(f"- `{name}` in `{short_file}` - {reason}")
+                if len(entry_points) > 5:
+                    lines.append(f"- *... and {len(entry_points) - 5} more*")
+                lines.append("")
+                lines.append("See [Execution Flow](execution_flow.md) for detailed call traces.")
+                lines.append("")
+
+        # Core functions summary (if available)
+        if self.centrality:
+            c_summary = self.centrality.get("summary", {})
+            core = self.centrality.get("core_components", [])
+            hubs = self.centrality.get("hub_components", [])
+
+            lines.append("## Core vs Helper Classification")
+            lines.append("")
+            lines.append(f"- **Core Functions:** {c_summary.get('core_count', 0)} (central to the system)")
+            lines.append(f"- **Hub Functions:** {c_summary.get('hub_count', 0)} (orchestrators/controllers)")
+            lines.append(f"- **Utility Functions:** {c_summary.get('utility_count', 0)} (helpers)")
+            lines.append(f"- **Isolated Functions:** {c_summary.get('isolated_count', 0)} (standalone)")
+            lines.append("")
+
+            if core:
+                lines.append("**Top Core Functions:**")
+                # Deduplicate by function name (keep highest in-degree)
+                seen_names: set[str] = set()
+                for comp in core[:5]:
+                    name = comp.get("name", "?")
+                    if name in seen_names:
+                        continue
+                    seen_names.add(name)
+                    in_deg = comp.get("in_degree", 0)
+                    file_path = comp.get("file", "")
+                    short_file = Path(file_path).name if file_path else ""
+                    lines.append(f"- `{name}` in `{short_file}` (called by {in_deg} functions)")
+                    if len(seen_names) >= 3:
+                        break
+                lines.append("")
+
+            lines.append("See [Core Components](core_components.md) for detailed analysis.")
+            lines.append("")
 
         return "\n".join(lines)
 
@@ -2535,6 +3011,226 @@ class ArchitectureGenerator:
 
         return True
 
+    def _generate_execution_flow_doc(self) -> str:
+        """Generate execution flow documentation from entry points."""
+        lines = []
+
+        lines.append("# Execution Flow")
+        lines.append("")
+        lines.append("This document shows how code flows from entry points through the system.")
+        lines.append("")
+
+        # Summary
+        ef_summary = self.execution_flow.get("summary", {})
+        lines.append("## Summary")
+        lines.append("")
+        lines.append(f"- **Entry Points:** {ef_summary.get('total_entry_points', 0)}")
+        lines.append(f"- **Max Call Depth:** {ef_summary.get('max_depth', 0)}")
+        lines.append(f"- **Unique Functions Traced:** {ef_summary.get('total_unique_functions', 0)}")
+        lines.append("")
+
+        # Entry points
+        entry_points = self.execution_flow.get("entry_points", [])
+        if entry_points:
+            lines.append("## Entry Points")
+            lines.append("")
+            lines.append("| Name | File | Reason |")
+            lines.append("|------|------|--------|")
+            for ep in entry_points:
+                name = ep.get("name", "?")
+                file_path = ep.get("file", "")
+                short_file = Path(file_path).name if file_path else ""
+                reason = ep.get("reason", "")
+                lines.append(f"| `{name}` | `{short_file}` | {reason} |")
+            lines.append("")
+
+        # Execution flows
+        flows = self.execution_flow.get("flows", [])
+        if flows:
+            lines.append("## Execution Flows")
+            lines.append("")
+            lines.append("Flow trees from each entry point (showing call depth):")
+            lines.append("")
+
+            for flow_item in flows[:10]:  # Limit to top 10
+                ep = flow_item.get("entry_point", {})
+                flow = flow_item.get("flow", {})
+                depth = flow_item.get("depth", 0)
+                total_calls = flow_item.get("total_calls", 0)
+
+                ep_name = ep.get("name", "?")
+                ep_file = ep.get("file", "")
+
+                lines.append(f"### {ep_name}")
+                lines.append("")
+                lines.append(f"**File:** `{ep_file}`  ")
+                lines.append(f"**Depth:** {depth} | **Total Calls:** {total_calls}")
+                lines.append("")
+                lines.append("```")
+                lines.extend(self._format_flow_tree(flow))
+                lines.append("```")
+                lines.append("")
+
+        return "\n".join(lines)
+
+    def _format_flow_tree(self, flow: dict[str, Any], indent: int = 0) -> list[str]:
+        """Format a flow tree as ASCII tree lines."""
+        lines = []
+        prefix = "  " * indent
+        connector = "├─ " if indent > 0 else ""
+
+        name = flow.get("name", "?")
+        file_path = flow.get("file", "")
+        line = flow.get("line", 0)
+
+        if flow.get("truncated"):
+            reason = flow.get("reason", "")
+            lines.append(f"{prefix}{connector}... ({reason})")
+        elif flow.get("external"):
+            lines.append(f"{prefix}{connector}{name} [external]")
+        else:
+            if file_path:
+                short_file = Path(file_path).name
+                lines.append(f"{prefix}{connector}{name} ({short_file}:{line})")
+            else:
+                lines.append(f"{prefix}{connector}{name}")
+
+            calls = flow.get("calls", [])
+            for child in calls[:8]:  # Limit children per level
+                child_lines = self._format_flow_tree(child, indent + 1)
+                lines.extend(child_lines)
+            if len(calls) > 8:
+                lines.append(f"{prefix}  └─ ... ({len(calls) - 8} more)")
+
+        return lines
+
+    def _generate_core_components_doc(self) -> str:
+        """Generate core components documentation based on centrality analysis."""
+        lines = []
+
+        lines.append("# Core Components")
+        lines.append("")
+        lines.append("This document identifies the most important components in the codebase")
+        lines.append("based on call graph centrality analysis.")
+        lines.append("")
+
+        # Summary
+        c_summary = self.centrality.get("summary", {})
+        lines.append("## Summary")
+        lines.append("")
+        lines.append(f"- **Total Functions Analyzed:** {c_summary.get('total_functions', 0)}")
+        lines.append(f"- **Core Functions:** {c_summary.get('core_count', 0)} (highly called by others)")
+        lines.append(f"- **Hub Functions:** {c_summary.get('hub_count', 0)} (call many others)")
+        lines.append(f"- **Utility Functions:** {c_summary.get('utility_count', 0)} (called often, call little)")
+        lines.append(f"- **Isolated Functions:** {c_summary.get('isolated_count', 0)} (no callers)")
+        lines.append("")
+        avg_in = c_summary.get("avg_in_degree", 0)
+        avg_out = c_summary.get("avg_out_degree", 0)
+        lines.append(f"**Average in-degree:** {avg_in:.2f} | **Average out-degree:** {avg_out:.2f}")
+        lines.append("")
+
+        # Core components (highly called) - deduplicate by function name
+        core = self.centrality.get("core_components", [])
+        if core:
+            lines.append("## Core Functions")
+            lines.append("")
+            lines.append("These functions are central to the system - many other functions depend on them:")
+            lines.append("")
+            lines.append("| Function | File | In-Degree | Out-Degree | Callers |")
+            lines.append("|----------|------|-----------|------------|---------|")
+            seen_names: set[str] = set()
+            shown = 0
+            for comp in core:
+                name = comp.get("name", "?")
+                # Skip duplicates (same function in multiple files = code duplication)
+                if name in seen_names:
+                    continue
+                seen_names.add(name)
+                file_path = comp.get("file", "")
+                in_deg = comp.get("in_degree", 0)
+                out_deg = comp.get("out_degree", 0)
+                callers = comp.get("callers", [])
+                caller_str = ", ".join(c.split(":")[-1] for c in callers[:3])
+                if len(callers) > 3:
+                    caller_str += f" (+{len(callers) - 3})"
+                short_file = Path(file_path).name if file_path else ""
+                lines.append(f"| `{name}` | `{short_file}` | {in_deg} | {out_deg} | {caller_str} |")
+                shown += 1
+                if shown >= 15:
+                    break
+            lines.append("")
+
+        # Hub components (orchestrators) - deduplicate by function name
+        hubs = self.centrality.get("hub_components", [])
+        if hubs:
+            lines.append("## Hub Functions (Orchestrators)")
+            lines.append("")
+            lines.append("These functions coordinate many others - they're entry points or controllers:")
+            lines.append("")
+            lines.append("| Function | File | Out-Degree | In-Degree |")
+            lines.append("|----------|------|------------|-----------|")
+            seen_names: set[str] = set()
+            shown = 0
+            for comp in hubs:
+                name = comp.get("name", "?")
+                if name in seen_names:
+                    continue
+                seen_names.add(name)
+                file_path = comp.get("file", "")
+                in_deg = comp.get("in_degree", 0)
+                out_deg = comp.get("out_degree", 0)
+                short_file = Path(file_path).name if file_path else ""
+                lines.append(f"| `{name}` | `{short_file}` | {out_deg} | {in_deg} |")
+                shown += 1
+                if shown >= 15:
+                    break
+            lines.append("")
+
+        # Utility components - deduplicate by function name
+        utilities = self.centrality.get("utility_components", [])
+        if utilities:
+            lines.append("## Utility Functions")
+            lines.append("")
+            lines.append("Helper functions used throughout the codebase:")
+            lines.append("")
+            lines.append("| Function | File | In-Degree |")
+            lines.append("|----------|------|-----------|")
+            seen_names = set()
+            shown = 0
+            for comp in utilities:
+                name = comp.get("name", "?")
+                if name in seen_names:
+                    continue
+                seen_names.add(name)
+                file_path = comp.get("file", "")
+                in_deg = comp.get("in_degree", 0)
+                short_file = Path(file_path).name if file_path else ""
+                lines.append(f"| `{name}` | `{short_file}` | {in_deg} |")
+                shown += 1
+                if shown >= 15:
+                    break
+            lines.append("")
+
+        # Isolated components
+        isolated = self.centrality.get("isolated_components", [])
+        if isolated:
+            lines.append("## Isolated Functions")
+            lines.append("")
+            lines.append("Functions with no callers (may be entry points, dead code, or tests):")
+            lines.append("")
+            lines.append("| Function | File |")
+            lines.append("|----------|------|")
+            for comp in isolated[:10]:
+                name = comp.get("name", "?")
+                file_path = comp.get("file", "")
+                short_file = Path(file_path).name if file_path else ""
+                lines.append(f"| `{name}` | `{short_file}` |")
+            if len(isolated) > 10:
+                lines.append(f"| ... | *{len(isolated) - 10} more* |")
+            lines.append("")
+
+        return "\n".join(lines)
+
     def _generate_arch_index(self, components: list[dict[str, Any]]) -> str:
         """Generate the architecture index/README file."""
         lines = []
@@ -2549,6 +3245,10 @@ class ArchitectureGenerator:
         lines.append("")
         lines.append("- [Overview](overview.md) - High-level architecture overview")
         lines.append("- [Data Flow](data_flow.md) - How data flows through the system")
+        if self.execution_flow:
+            lines.append("- [Execution Flow](execution_flow.md) - Entry points and call traces")
+        if self.centrality:
+            lines.append("- [Core Components](core_components.md) - Core vs helper classification")
         lines.append("")
 
         lines.append("## Component Documentation")
@@ -2688,8 +3388,8 @@ class ProjectHealthGenerator:
         # Node.js dependencies
         node_deps = self.dependencies.get("node", {})
         if node_deps:
-            prod_deps = node_deps.get("dependencies", {})
-            dev_deps = node_deps.get("devDependencies", {})
+            prod_deps = node_deps.get("dependencies", node_deps.get("production", {}))
+            dev_deps = node_deps.get("devDependencies", node_deps.get("development", {}))
 
             if prod_deps or dev_deps:
                 lines.append("## Node.js Dependencies")
@@ -2698,19 +3398,33 @@ class ProjectHealthGenerator:
                 if prod_deps:
                     lines.append("### Production")
                     lines.append("")
-                    lines.append("| Package | Version |")
-                    lines.append("|---------|---------|")
-                    for name, version in prod_deps.items():
-                        lines.append(f"| `{name}` | {version} |")
+                    # Handle both list and dict formats
+                    if isinstance(prod_deps, dict):
+                        lines.append("| Package | Version |")
+                        lines.append("|---------|---------|")
+                        for name, version in prod_deps.items():
+                            lines.append(f"| `{name}` | {version} |")
+                    else:
+                        lines.append("| Package |")
+                        lines.append("|---------|")
+                        for name in prod_deps:
+                            lines.append(f"| `{name}` |")
                     lines.append("")
 
                 if dev_deps:
                     lines.append("### Development")
                     lines.append("")
-                    lines.append("| Package | Version |")
-                    lines.append("|---------|---------|")
-                    for name, version in dev_deps.items():
-                        lines.append(f"| `{name}` | {version} |")
+                    # Handle both list and dict formats
+                    if isinstance(dev_deps, dict):
+                        lines.append("| Package | Version |")
+                        lines.append("|---------|---------|")
+                        for name, version in dev_deps.items():
+                            lines.append(f"| `{name}` | {version} |")
+                    else:
+                        lines.append("| Package |")
+                        lines.append("|---------|")
+                        for name in dev_deps:
+                            lines.append(f"| `{name}` |")
                     lines.append("")
 
                 has_content = True
@@ -3002,3 +3716,243 @@ def generate_health_docs(
     """
     generator = ProjectHealthGenerator(index_data)
     return generator.generate(output_dir)
+
+
+class UnifiedIndexGenerator:
+    """
+    Generate unified index.md as the documentation entry point.
+
+    Creates a single starting page that links to all documentation layers
+    with context and navigation.
+    """
+
+    def __init__(self, index_data: dict[str, Any]) -> None:
+        """
+        Initialize the unified index generator.
+
+        Args:
+            index_data: The loaded codebase index.
+        """
+        self.index_data = index_data
+        self.summary = index_data.get("summary", {})
+        self.meta = index_data.get("meta", {})
+        self.symbol_index = index_data.get("symbol_index", {})
+        self.endpoints = index_data.get("api_endpoints", [])
+        self.linker = SymbolLinker(index_data)
+
+    def generate(self, output_dir: Path, enabled_layers: list[str]) -> dict[str, Any]:
+        """
+        Generate the unified index page.
+
+        Args:
+            output_dir: Directory to write the index file.
+            enabled_layers: List of enabled doc layers for navigation.
+
+        Returns:
+            Summary of generated file.
+        """
+        output_dir.mkdir(parents=True, exist_ok=True)
+        index_path = output_dir / "index.md"
+
+        content = self._generate_index_content(enabled_layers)
+
+        with open(index_path, "w", encoding="utf-8") as f:
+            f.write(content)
+
+        return {
+            "layer": "index",
+            "files": [str(index_path)],
+        }
+
+    def _generate_index_content(self, enabled_layers: list[str]) -> str:
+        """Generate the content for the unified index page."""
+        lines = []
+
+        # Project name from git or fallback
+        git_info = self.meta.get("git", {})
+        project_name = git_info.get("repo", "Project") or "Project"
+        if project_name == "Project":
+            # Try to infer from root path or use generic
+            project_name = "Codebase"
+
+        lines.append(f"# {project_name} Documentation")
+        lines.append("")
+        lines.append("> Auto-generated documentation from codebase-index")
+        lines.append("")
+
+        # Generation info
+        generated_at = self.meta.get("generated_at", "")
+        tool_version = self.meta.get("tool_version", "")
+        if generated_at or tool_version:
+            lines.append(f"*Generated: {generated_at} | Tool version: {tool_version}*")
+            lines.append("")
+
+        # Overview section
+        lines.append("## Overview")
+        lines.append("")
+
+        total_files = self.summary.get("total_files", 0)
+        total_lines = self.summary.get("total_lines", 0)
+        total_functions = self.summary.get("total_functions", 0)
+        total_classes = self.summary.get("total_classes", 0)
+        endpoint_count = len(self.endpoints)
+        test_coverage = self.summary.get("test_coverage_percent", 0)
+
+        # Languages
+        by_language = self.summary.get("by_language", {})
+        languages = list(by_language.keys()) if by_language else ["Unknown"]
+        lang_str = ", ".join(languages[:5])
+        if len(languages) > 5:
+            lang_str += f" +{len(languages) - 5} more"
+
+        lines.append("| Metric | Value |")
+        lines.append("|--------|-------|")
+        lines.append(f"| **Files** | {total_files:,} |")
+        lines.append(f"| **Lines of Code** | {total_lines:,} |")
+        lines.append(f"| **Functions** | {total_functions:,} |")
+        lines.append(f"| **Classes** | {total_classes:,} |")
+        lines.append(f"| **API Endpoints** | {endpoint_count:,} |")
+        lines.append(f"| **Test Coverage** | {test_coverage:.0f}% |")
+        lines.append(f"| **Languages** | {lang_str} |")
+        lines.append("")
+
+        # Documentation layers
+        lines.append("## Documentation Layers")
+        lines.append("")
+        lines.append("Navigate to different views of the codebase:")
+        lines.append("")
+        lines.append("| Layer | Description | Best For |")
+        lines.append("|-------|-------------|----------|")
+
+        layer_info = {
+            "api": ("API Reference", "api/README.md", "REST endpoints, methods, auth requirements", "API consumers"),
+            "modules": ("Modules", "modules/README.md", "Package organization, file purposes", "Understanding structure"),
+            "reference": ("Reference", "reference/README.md", "Functions, classes, signatures, call graphs", "Developers"),
+            "architecture": ("Architecture", "architecture/README.md", "Components, patterns, data flow", "System design"),
+            "health": ("Health", "health/README.md", "Dependencies, code quality, tech debt", "Maintenance"),
+        }
+
+        for layer_key, (name, path, desc, audience) in layer_info.items():
+            if layer_key in enabled_layers or "all" in enabled_layers:
+                lines.append(f"| [{name}]({path}) | {desc} | {audience} |")
+
+        lines.append("")
+
+        # Key entry points
+        lines.append("## Key Entry Points")
+        lines.append("")
+
+        # Find main functions (main, __main__, entry points)
+        main_functions = self._find_main_functions()
+        key_classes = self._find_key_classes()
+
+        if main_functions or key_classes or self.endpoints:
+            if main_functions:
+                lines.append("### Main Functions")
+                lines.append("")
+                for func in main_functions[:5]:
+                    link = self.linker.link_symbol(func["name"], from_layer="root")
+                    file_path = func.get("file", "")
+                    lines.append(f"- {link} - `{file_path}`")
+                lines.append("")
+
+            if key_classes:
+                lines.append("### Core Classes")
+                lines.append("")
+                for cls in key_classes[:5]:
+                    link = self.linker.link_symbol(cls["name"], from_layer="root")
+                    desc = cls.get("summary", cls.get("docstring", ""))
+                    if desc:
+                        desc = desc.split("\n")[0][:60]
+                        if len(desc) == 60:
+                            desc += "..."
+                    lines.append(f"- {link} - {desc or 'Core class'}")
+                lines.append("")
+
+            if self.endpoints:
+                lines.append("### Key Endpoints")
+                lines.append("")
+                # Show first few endpoints grouped by method
+                shown = 0
+                for ep in sorted(self.endpoints, key=lambda e: (e.get("method", ""), e.get("path", "")))[:5]:
+                    method = ep.get("method", "GET").upper()
+                    path = ep.get("full_path", ep.get("path", "/"))
+                    func = ep.get("function", "")
+                    lines.append(f"- `{method} {path}` → `{func}()`")
+                    shown += 1
+                if len(self.endpoints) > 5:
+                    lines.append(f"- ... and {len(self.endpoints) - 5} more endpoints")
+                lines.append("")
+        else:
+            lines.append("*No main entry points detected.*")
+            lines.append("")
+
+        # Quick links
+        lines.append("## Quick Links")
+        lines.append("")
+
+        if "reference" in enabled_layers or "all" in enabled_layers:
+            lines.append("- [All Symbols (A-Z)](reference/README.md) - Complete symbol index")
+        if "api" in enabled_layers or "all" in enabled_layers:
+            lines.append("- [All Endpoints](api/README.md) - API endpoint listing")
+        if "health" in enabled_layers or "all" in enabled_layers:
+            lines.append("- [Code Health](health/code_health.md) - Quality metrics")
+            lines.append("- [Dependencies](health/dependencies.md) - Project dependencies")
+        lines.append("")
+
+        # Footer
+        lines.append("---")
+        lines.append("")
+        lines.append("*Documentation generated by [codebase-index](https://github.com/your-repo/codebase-index)*")
+        lines.append("")
+
+        return "\n".join(lines)
+
+    def _find_main_functions(self) -> list[dict[str, Any]]:
+        """Find main entry point functions."""
+        main_functions = []
+        main_names = {"main", "__main__", "cli", "run", "start", "app"}
+
+        for func in self.symbol_index.get("functions", []):
+            name = func.get("name", "").lower()
+            if name in main_names or name.startswith("main"):
+                main_functions.append(func)
+
+        return main_functions[:10]
+
+    def _find_key_classes(self) -> list[dict[str, Any]]:
+        """Find key/core classes (by naming patterns)."""
+        key_classes = []
+        key_patterns = {"scanner", "generator", "service", "controller", "manager", "handler", "client"}
+
+        for cls in self.symbol_index.get("classes", []):
+            name = cls.get("name", "").lower()
+            # Check if class name contains key patterns
+            if any(pattern in name for pattern in key_patterns):
+                key_classes.append(cls)
+            # Also include classes with many methods (likely important)
+            elif len(cls.get("methods", [])) > 5:
+                key_classes.append(cls)
+
+        # Sort by likely importance (name patterns first, then method count)
+        return sorted(key_classes, key=lambda c: -len(c.get("methods", [])))[:10]
+
+
+def generate_unified_index(
+    index_data: dict[str, Any],
+    output_dir: Path,
+    enabled_layers: list[str],
+) -> dict[str, Any]:
+    """
+    Generate the unified documentation index page.
+
+    Args:
+        index_data: The codebase index.
+        output_dir: Directory to write the index file.
+        enabled_layers: List of enabled documentation layers.
+
+    Returns:
+        Summary of generated file.
+    """
+    generator = UnifiedIndexGenerator(index_data)
+    return generator.generate(output_dir, enabled_layers)

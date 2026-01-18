@@ -10,6 +10,8 @@ from codebase_index.analyzers.auth import AuthScanner
 from codebase_index.analyzers.complexity import ComplexityAnalyzer
 from codebase_index.analyzers.coverage import TestCoverageMapper
 from codebase_index.analyzers.orphans import OrphanedFileScanner
+from codebase_index.analyzers.execution_flow import ExecutionFlowAnalyzer, analyze_execution_flow
+from codebase_index.analyzers.centrality import CentralityAnalyzer, analyze_centrality
 
 __all__ = [
     "ImportAggregator",
@@ -17,4 +19,8 @@ __all__ = [
     "ComplexityAnalyzer",
     "TestCoverageMapper",
     "OrphanedFileScanner",
+    "ExecutionFlowAnalyzer",
+    "CentralityAnalyzer",
+    "analyze_execution_flow",
+    "analyze_centrality",
 ]

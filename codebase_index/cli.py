@@ -745,6 +745,7 @@ def main() -> None:
             generate_function_reference,
             generate_architecture_docs,
             generate_health_docs,
+            generate_unified_index,
         )
 
         output_dir = Path(args.output_dir)
@@ -809,6 +810,12 @@ def main() -> None:
             generated.append(health_result)
             if args.verbose:
                 print(f"  Health: {len(health_result.get('files', []))} pages generated", file=sys.stderr)
+
+        # Generate unified index page (always generated as entry point)
+        index_result = generate_unified_index(result, output_dir, layers)
+        generated.append(index_result)
+        if args.verbose:
+            print(f"  Index: Created unified index.md", file=sys.stderr)
 
         # Output summary
         summary = {

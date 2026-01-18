@@ -39,6 +39,8 @@ from codebase_index.analyzers import (
     ComplexityAnalyzer,
     TestCoverageMapper,
     OrphanedFileScanner,
+    ExecutionFlowAnalyzer,
+    CentralityAnalyzer,
 )
 
 if TYPE_CHECKING:
@@ -133,6 +135,10 @@ class CodebaseScanner:
         # Build call graph and detect duplicates
         self._build_call_graph(result)
 
+        # Run architectural analyzers (need call graph)
+        result["execution_flow"] = ExecutionFlowAnalyzer(result).analyze()
+        result["centrality"] = CentralityAnalyzer(result).analyze()
+
         # Run domain scanners
         result["dependencies"] = self.deps_scanner.scan(self.root)
         result["environment_variables"] = self.env_scanner.scan(self.root, self.exclude)
@@ -190,6 +196,8 @@ class CodebaseScanner:
             "router_prefixes": {},
             "call_graph": {},
             "potential_duplicates": [],
+            "execution_flow": {},
+            "centrality": {},
         }
 
     def _build_meta(self) -> dict[str, Any]:
@@ -559,6 +567,19 @@ class CodebaseScanner:
         summary["total_duplicated_functions"] = sum(
             d["count"] for d in result["potential_duplicates"]
         )
+
+        # Add architectural analysis summary
+        if result.get("execution_flow"):
+            ef_summary = result["execution_flow"].get("summary", {})
+            summary["entry_points_count"] = ef_summary.get("total_entry_points", 0)
+            summary["max_call_depth"] = ef_summary.get("max_depth", 0)
+
+        if result.get("centrality"):
+            c_summary = result["centrality"].get("summary", {})
+            summary["core_functions"] = c_summary.get("core_count", 0)
+            summary["hub_functions"] = c_summary.get("hub_count", 0)
+            summary["utility_functions"] = c_summary.get("utility_count", 0)
+            summary["isolated_functions"] = c_summary.get("isolated_count", 0)
 
         # Generate README badges
         result["badges"] = self._generate_badges(summary)
