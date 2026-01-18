@@ -7,6 +7,7 @@ rather than doing a full re-scan of the entire codebase.
 
 from __future__ import annotations
 
+import copy
 import hashlib
 import logging
 import time
@@ -178,18 +179,28 @@ class IncrementalUpdater:
         Returns:
             Updated index data.
         """
-        # Start with a copy of the existing index
-        updated = {
-            "meta": self.index_data.get("meta", {}),
-            "summary": self.index_data.get("summary", {}),
-            "files": [],
-            "api_endpoints": [],
-            "database": self.index_data.get("database", {"tables": []}),
-            "schemas": [],
-            "symbol_index": self.index_data.get("symbol_index", {}),
-            "call_graph": dict(self.index_data.get("call_graph", {})),
-            "router_prefixes": {},
-        }
+        # Keys that contain per-file data and need to be rebuilt during update
+        REBUILD_KEYS = {"files", "api_endpoints", "schemas", "router_prefixes"}
+
+        # Start by copying all analysis data from existing index
+        # This preserves semantic embeddings, summaries, and other analysis results
+        updated = {}
+        for key, value in self.index_data.items():
+            if key in REBUILD_KEYS:
+                continue  # Will be rebuilt below
+            # Deep copy mutable structures to avoid modifying original
+            if isinstance(value, dict):
+                updated[key] = copy.deepcopy(value)
+            elif isinstance(value, list):
+                updated[key] = copy.deepcopy(value)
+            else:
+                updated[key] = value
+
+        # Initialize the keys that need rebuilding
+        updated["files"] = []
+        updated["api_endpoints"] = []
+        updated["schemas"] = []
+        updated["router_prefixes"] = {}
 
         # Files to re-scan
         files_to_scan = set(changes["added"]) | set(changes["updated"])

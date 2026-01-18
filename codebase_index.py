@@ -2014,6 +2014,16 @@ class PythonScanner:
             return f"{self._get_name(node.value)}.{node.attr}"
         elif isinstance(node, ast.Constant):
             return str(node.value)
+        elif isinstance(node, ast.Subscript):
+            # Handle Generic[T], Dict[str, Any], etc.
+            if hasattr(ast, 'unparse'):
+                return ast.unparse(node)
+            # Fallback for older Python
+            base = self._get_name(node.value)
+            return f"{base}[...]"
+        # Fallback: use ast.unparse if available (Python 3.9+)
+        if hasattr(ast, 'unparse'):
+            return ast.unparse(node)
         return str(node)
 
     def _get_decorator_name(self, node) -> str:
