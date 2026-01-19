@@ -22,12 +22,10 @@ from codebase_index.config import (
     load_config,
 )
 from codebase_index.scanner import CodebaseScanner
-from codebase_index.call_graph import cg_query_function, cg_query_file, cg_query_callers
+from codebase_index.call_graph import cg_query_callers
 from codebase_index.analyzers.staleness import StalenessChecker
 from codebase_index.analyzers.test_mapper import TestMapper
 from codebase_index.analyzers.impact import ImpactAnalyzer
-from codebase_index.analyzers.schema_mapper import SchemaMapper
-from codebase_index.analyzers.coupling import CouplingAnalyzer
 
 if TYPE_CHECKING:
     from typing import Any
@@ -38,7 +36,7 @@ logger = logging.getLogger(__name__)
 def create_parser() -> argparse.ArgumentParser:
     """Create the argument parser."""
     parser = argparse.ArgumentParser(
-        description="Generate comprehensive codebase inventory",
+        description="Understand code before changing it",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -49,76 +47,34 @@ QUICK START
   codebase-index . --summary          # Quick overview only
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-LLM AGENT WORKFLOW (Recommended Sequence)
+WORKFLOW
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-Step 1: EXPLORE - Run initial scan with defaults
-  codebase-index . --summary --no-hash
-
-Step 2: ANALYZE - Review the output, identify:
-  - What framework is used (FastAPI, Django, Flask, Express, etc.)
-  - Project structure (where are routes, models, tests)
-  - What's missing or incorrectly detected
-
-Step 3: CONFIGURE (if needed) - Create custom config
-  codebase-index --init-config > codebase_index.yaml
-  # Then customize the YAML for the project's framework/patterns
-
-Step 4: SCAN - Run full scan with config
-  codebase-index . --config codebase_index.yaml -o index.json
-
-Step 5: QUERY - Use analysis commands as needed
-  codebase-index --load index.json --check          # Check staleness
-  codebase-index --load index.json --impact file.py # Impact analysis
-  codebase-index --load index.json --tests-for Foo  # Find tests
-  codebase-index --load index.json --schema User    # Schema usage
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-CONFIG FILE GUIDELINES
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-The config file controls pattern matching. Key sections:
-
-  auth.parameters:   Regex patterns for auth in function signatures
-                     e.g., "Depends\\s*\\(\\s*get_current_user"
-
-  auth.decorators:   Regex patterns for auth decorators
-                     e.g., "@login_required", "@jwt_required"
-
-  models.patterns:   How to detect ORM models (base_class or marker)
-  schemas.patterns:  How to detect Pydantic/serializer schemas
-  routes.patterns:   How to detect API endpoints
-  exclude:           Directories/extensions/patterns to skip
-
-When customizing:
-  - Use regex patterns (remember to escape backslashes in YAML)
-  - Test incrementally: change one section, re-run, verify
-  - Check --verbose output to see what patterns are being used
+1. Scan:   codebase-index . -o index.json
+2. Query:  codebase-index --load index.json --callers MyFunction
+3. Update: codebase-index --load index.json --update -o index.json
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 ANALYSIS QUERIES
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  --check              Check if index is stale (files changed since scan)
-  --tests-for SYMBOL   Find tests for a function/class
-  --impact FILE        Show what depends on a file (callers, tests, endpoints)
-  --schema NAME        Find endpoints using a schema
-  --cg-query FUNC      What does FUNC call?
-  --cg-callers FUNC    What calls FUNC?
+  --check            Check if index is stale (files changed since scan)
+  --update           Incrementally update the index
+  --callers SYMBOL   What calls SYMBOL? (inverse call graph)
+  --impact FILE      Blast radius: callers, tests, endpoints affected
+  --tests SYMBOL     Find tests for a function/class
+  --doc SYMBOL       Full documentation for a symbol
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SEMANTIC SEARCH
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  --build-embeddings   Build semantic index (requires sentence-transformers)
+  --search QUERY       Search code by description
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 DISCLAIMER
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-This tool uses static analysis (AST parsing + regex patterns). It may:
-
-  - MISS things: Dynamic routes, metaprogramming, runtime-generated code,
-    unusual patterns not covered by default config
-
-  - FALSE POSITIVES: Patterns that look like routes/models but aren't,
-    inherited auth that isn't detected, similar naming conventions
-
-For best results:
-  - Always verify critical findings against actual source code
-  - Customize the config for your specific framework/patterns
-  - Use --verbose to understand what's being detected and why
-  - Report issues: https://github.com/anthropics/codebase-index/issues
+This tool uses static analysis (AST parsing). It may miss dynamic code,
+metaprogramming, or runtime-generated patterns. Always verify critical
+findings against actual source code.
         """,
     )
 
@@ -181,19 +137,9 @@ For best results:
     # Call graph query options
     cg_group = parser.add_argument_group("Call Graph Queries")
     cg_group.add_argument(
-        "--cg-query",
-        metavar="FUNC",
-        help="What does FUNC call? (fuzzy match on function name)",
-    )
-    cg_group.add_argument(
-        "--cg-file",
-        metavar="FILE",
-        help="Show call graph for all functions in FILE",
-    )
-    cg_group.add_argument(
-        "--cg-callers",
-        metavar="FUNC",
-        help="What functions call FUNC? (inverse lookup)",
+        "--callers",
+        metavar="SYMBOL",
+        help="What calls SYMBOL? (inverse call graph lookup)",
     )
 
     # Analysis query options
@@ -204,7 +150,7 @@ For best results:
         help="Check if loaded index is stale (use with --load)",
     )
     analysis_group.add_argument(
-        "--tests-for",
+        "--tests",
         metavar="SYMBOL",
         help="Find tests for a function/class (e.g., 'AgentFactory.create')",
     )
@@ -214,22 +160,7 @@ For best results:
         help="Show impact radius: callers, affected tests, affected endpoints",
     )
     analysis_group.add_argument(
-        "--schema",
-        metavar="NAME",
-        help="Find endpoints using a schema (e.g., 'AgentConfig')",
-    )
-    analysis_group.add_argument(
-        "--coupled-with",
-        metavar="FILE",
-        help="Find files tightly coupled to FILE (likely need changes together)",
-    )
-    analysis_group.add_argument(
-        "--summary-for",
-        metavar="SYMBOL",
-        help="Get LLM-generated summary for a function/method (e.g., 'scan_file', 'Parser.parse')",
-    )
-    analysis_group.add_argument(
-        "--doc-for",
+        "--doc",
         metavar="SYMBOL",
         help="Generate full documentation for a symbol (signature, callers, tests, code)",
     )
@@ -264,91 +195,6 @@ For best results:
         default=0.3,
         help="Minimum similarity score for semantic search (0.0-1.0, default: 0.3). Lower = more results.",
     )
-    advanced_group.add_argument(
-        "--generate-summaries",
-        action="store_true",
-        help="Generate LLM summaries for functions (requires API key)",
-    )
-    advanced_group.add_argument(
-        "--force-summaries",
-        action="store_true",
-        help="Regenerate LLM summaries even for functions with existing docstrings",
-    )
-    advanced_group.add_argument(
-        "--summary-provider",
-        metavar="PROVIDER",
-        choices=["openrouter", "anthropic", "openai"],
-        help="Summary provider: openrouter, anthropic, openai (auto-detects from API key)",
-    )
-    advanced_group.add_argument(
-        "--summary-model",
-        metavar="MODEL",
-        help="Model for summaries (e.g., anthropic/claude-3-haiku, gpt-4o-mini)",
-    )
-    advanced_group.add_argument(
-        "--api-key",
-        metavar="KEY",
-        help="API key for summaries (alternative to environment variable)",
-    )
-    advanced_group.add_argument(
-        "--summary-workers",
-        metavar="N",
-        type=int,
-        default=4,
-        help="Number of parallel workers for LLM summary generation (default: 4)",
-    )
-    advanced_group.add_argument(
-        "--summary-level",
-        metavar="LEVELS",
-        default="functions",
-        help="Comma-separated summary levels: functions,classes,files,all (default: functions)",
-    )
-
-    # Documentation generation
-    docs_group = parser.add_argument_group("Documentation Generation")
-    docs_group.add_argument(
-        "--generate-docs",
-        action="store_true",
-        help="Generate documentation from the index",
-    )
-    docs_group.add_argument(
-        "--output-dir",
-        metavar="DIR",
-        default="docs/generated",
-        help="Output directory for generated docs (default: docs/generated)",
-    )
-    docs_group.add_argument(
-        "--doc-layers",
-        metavar="LAYERS",
-        default="all",
-        help="Comma-separated doc layers: api,modules,reference,architecture,health or 'all' (default: all)",
-    )
-    docs_group.add_argument(
-        "--doc-diff",
-        metavar="DIR",
-        help="Check documentation freshness against source files in DIR",
-    )
-    docs_group.add_argument(
-        "--doc-template",
-        metavar="DIR",
-        help="Custom Jinja2 templates directory for documentation generation",
-    )
-    docs_group.add_argument(
-        "--init-templates",
-        metavar="DIR",
-        help="Export default documentation templates to DIR for customization",
-    )
-    docs_group.add_argument(
-        "--watch",
-        action="store_true",
-        help="Watch for file changes and regenerate documentation automatically",
-    )
-    docs_group.add_argument(
-        "--init-mkdocs",
-        metavar="DIR",
-        help="Generate mkdocs.yml config for docs in DIR (e.g., --init-mkdocs docs/)",
-    )
-
     parser.add_argument(
         "-v", "--verbose",
         action="store_true",
@@ -384,38 +230,6 @@ def main() -> None:
         print(get_config_template())
         return
 
-    # Handle --init-templates: export default templates
-    if args.init_templates:
-        from codebase_index.analyzers.templates import create_template_dir, check_jinja2_available
-
-        if not check_jinja2_available():
-            print(
-                "Error: Jinja2 is required for templates.\n"
-                "Install with: pip install jinja2",
-                file=sys.stderr,
-            )
-            sys.exit(1)
-
-        template_dir = Path(args.init_templates)
-        create_template_dir(template_dir)
-        print(f"Default templates exported to: {template_dir}")
-        print("Customize the .j2 files and use with --doc-template")
-        return
-
-    # Handle --init-mkdocs: generate mkdocs.yml config
-    if args.init_mkdocs:
-        from codebase_index.analyzers.mkdocs import generate_mkdocs_config
-
-        docs_dir = Path(args.init_mkdocs)
-        if not docs_dir.exists():
-            print(f"Error: Directory not found: {docs_dir}", file=sys.stderr)
-            sys.exit(1)
-
-        config_path = generate_mkdocs_config(docs_dir)
-        print(f"Generated: {config_path}")
-        print("Run 'mkdocs serve' to preview documentation")
-        return
-
     # Load config if specified
     config = DEFAULT_CONFIG
     if args.config:
@@ -444,7 +258,7 @@ def main() -> None:
                 print(f"  exclude: none configured", file=sys.stderr)
 
     # Check if we have call graph query options
-    has_cg_query = args.cg_query or args.cg_file or args.cg_callers
+    has_cg_query = args.callers
 
     # Load existing index or scan
     if args.load:
@@ -468,10 +282,10 @@ def main() -> None:
 
         # Add directory exclusions from config (critical for --update to work correctly)
         config_exclude = config.get("exclude", {})
-        config_dirs = config_exclude.get("directories", [])
+        config_dirs = config_exclude.get("directories") or []
         if config_dirs:
             exclude.extend(config_dirs)
-        config_patterns = config_exclude.get("patterns", [])
+        config_patterns = config_exclude.get("patterns") or []
         if config_patterns:
             exclude.extend(config_patterns)
 
@@ -483,7 +297,7 @@ def main() -> None:
                 exclude_extensions.add(ext.lower())
 
         # Add extension exclusions from config
-        config_exts = config_exclude.get("extensions", [])
+        config_exts = config_exclude.get("extensions") or []
         for ext in config_exts:
             if not ext.startswith('.'):
                 ext = '.' + ext
@@ -529,10 +343,10 @@ def main() -> None:
         print(json.dumps(staleness, indent=2, default=str))
         return
 
-    # Handle --tests-for: find tests for a symbol
-    if args.tests_for:
+    # Handle --tests: find tests for a symbol
+    if args.tests:
         mapper = TestMapper(result)
-        tests_result = mapper.find_tests_for(args.tests_for)
+        tests_result = mapper.find_tests_for(args.tests)
         print(json.dumps(tests_result, indent=2, default=str))
         return
 
@@ -543,65 +357,12 @@ def main() -> None:
         print(json.dumps(impact_result, indent=2, default=str))
         return
 
-    # Handle --schema: find endpoints using a schema
-    if args.schema:
-        root = Path(args.path).resolve()
-        mapper = SchemaMapper(result, root=root)
-        schema_result = mapper.find_endpoints_for_schema(args.schema)
-        print(json.dumps(schema_result, indent=2, default=str))
-        return
-
-    # Handle --coupled-with: find tightly coupled files
-    if args.coupled_with:
-        analyzer = CouplingAnalyzer(result)
-        coupling_result = analyzer.analyze(args.coupled_with)
-        print(json.dumps(coupling_result, indent=2, default=str))
-        return
-
-    # Handle --summary-for: get summary for a symbol
-    if args.summary_for:
-        symbol = args.summary_for
-        symbol_index = result.get("symbol_index", {})
-        matches = []
-
-        # Search functions
-        for func in symbol_index.get("functions", []):
-            if symbol.lower() in func.get("name", "").lower():
-                matches.append({
-                    "type": "function",
-                    "name": func.get("name"),
-                    "file": func.get("file"),
-                    "line": func.get("line"),
-                    "summary": func.get("summary") or func.get("docstring") or "(no summary)",
-                })
-
-        # Search methods (Class.method format)
-        for method in symbol_index.get("methods", []):
-            method_name = method.get("name", "")
-            class_name = method.get("class", "")
-            full_name = f"{class_name}.{method_name}"
-
-            if symbol.lower() in full_name.lower() or symbol.lower() in method_name.lower():
-                matches.append({
-                    "type": "method",
-                    "name": full_name,
-                    "file": method.get("file"),
-                    "line": method.get("line"),
-                    "summary": method.get("summary") or method.get("docstring") or "(no summary)",
-                })
-
-        if not matches:
-            print(json.dumps({"symbol": symbol, "error": "No matching symbols found"}, indent=2))
-        else:
-            print(json.dumps({"symbol": symbol, "matches": matches}, indent=2))
-        return
-
-    # Handle --doc-for: generate full documentation for a symbol
-    if args.doc_for:
+    # Handle --doc: generate full documentation for a symbol
+    if args.doc:
         from codebase_index.analyzers.doc_generator import generate_doc_for_symbol
 
         root = Path(args.path).resolve()
-        doc_result = generate_doc_for_symbol(result, args.doc_for, root=root)
+        doc_result = generate_doc_for_symbol(result, args.doc, root=root)
 
         # Print markdown to stdout (can be piped to file or pager)
         print(doc_result.get("markdown", ""))
@@ -661,224 +422,6 @@ def main() -> None:
         print(json.dumps(search_result, indent=2, default=str))
         return
 
-    # Handle --generate-summaries: LLM-generated function descriptions
-    if args.generate_summaries:
-        from codebase_index.analyzers.summaries import (
-            generate_summaries,
-            check_summaries_available,
-            check_api_key,
-            get_available_provider,
-        )
-
-        if not check_summaries_available():
-            print(
-                "Error: Summary generation requires httpx.\n"
-                "Install with: pip install codebase-index[summaries]",
-                file=sys.stderr,
-            )
-            sys.exit(1)
-
-        api_key = getattr(args, 'api_key', None)
-
-        if not api_key and not check_api_key():
-            print(
-                "Error: No API key found. Either:\n"
-                "  - Pass --api-key KEY\n"
-                "  - Set OPENROUTER_API_KEY (recommended - access any model)\n"
-                "  - Set ANTHROPIC_API_KEY\n"
-                "  - Set OPENAI_API_KEY",
-                file=sys.stderr,
-            )
-            sys.exit(1)
-
-        root = Path(args.path).resolve()
-        provider = getattr(args, 'summary_provider', None)
-        model = getattr(args, 'summary_model', None)
-
-        # If API key passed via argument, need to specify provider too
-        if api_key and not provider:
-            print(
-                "Error: --api-key requires --summary-provider to be specified.\n"
-                "Example: --api-key sk-... --summary-provider openrouter",
-                file=sys.stderr,
-            )
-            sys.exit(1)
-
-        force = getattr(args, 'force_summaries', False)
-        workers = getattr(args, 'summary_workers', 4)
-        level_str = getattr(args, 'summary_level', 'functions')
-
-        # Parse summary levels
-        if level_str == 'all':
-            levels = {'functions', 'classes', 'files'}
-        else:
-            levels = set(l.strip() for l in level_str.split(','))
-
-        if args.verbose:
-            detected_provider = provider or get_available_provider()
-            print(f"Generating LLM summaries (provider: {detected_provider})...", file=sys.stderr)
-            print(f"  Workers: {workers}", file=sys.stderr)
-            print(f"  Levels: {', '.join(sorted(levels))}", file=sys.stderr)
-            if force:
-                print("  Force mode: regenerating all summaries", file=sys.stderr)
-
-        result = generate_summaries(result, root, force=force, provider=provider, model=model, api_key=api_key, workers=workers, levels=levels)
-
-        if args.verbose:
-            summaries = result.get("summaries", {})
-            stats = summaries.get("stats", {})
-            print(f"  Provider: {summaries.get('provider', 'unknown')}", file=sys.stderr)
-            print(f"  Model: {summaries.get('model', 'unknown')}", file=sys.stderr)
-            print(f"  Generated: {stats.get('generated', 0)}", file=sys.stderr)
-            print(f"  Cached: {stats.get('cached', 0)}", file=sys.stderr)
-            print(f"  Skipped: {stats.get('skipped', 0)}", file=sys.stderr)
-            if stats.get('errors', 0) > 0:
-                print(f"  Errors: {stats.get('errors', 0)}", file=sys.stderr)
-
-        # Fall through to output the updated index
-
-    # Handle --generate-docs: generate documentation from index
-    if args.generate_docs:
-        from codebase_index.analyzers.doc_generator import (
-            generate_api_reference,
-            generate_module_readmes,
-            generate_function_reference,
-            generate_architecture_docs,
-            generate_health_docs,
-            generate_unified_index,
-        )
-
-        output_dir = Path(args.output_dir)
-        layers = args.doc_layers.lower().split(",")
-        template_dir = Path(args.doc_template) if args.doc_template else None
-
-        if args.verbose:
-            print(f"Generating documentation to: {output_dir}", file=sys.stderr)
-            print(f"Layers: {layers}", file=sys.stderr)
-            if template_dir:
-                print(f"Using templates from: {template_dir}", file=sys.stderr)
-
-        generated = []
-
-        # Parse which layers to generate
-        generate_all = "all" in layers
-        generate_api = generate_all or "api" in layers
-        generate_modules = generate_all or "modules" in layers
-        generate_reference = generate_all or "reference" in layers
-        generate_architecture = generate_all or "architecture" in layers
-        generate_health = generate_all or "health" in layers
-
-        # Generate API reference
-        if generate_api:
-            api_result = generate_api_reference(result, output_dir, template_dir=template_dir)
-            generated.append(api_result)
-            if args.verbose:
-                print(f"  API: {api_result.get('endpoints', 0)} endpoints in {api_result.get('routers', 0)} routers", file=sys.stderr)
-
-        # Generate Module READMEs
-        if generate_modules:
-            modules_result = generate_module_readmes(result, output_dir, template_dir=template_dir)
-            generated.append(modules_result)
-            if args.verbose:
-                print(f"  Modules: {modules_result.get('modules', 0)} modules documented", file=sys.stderr)
-
-        # Generate Function Reference
-        if generate_reference:
-            root = Path(args.path).resolve()
-            ref_result = generate_function_reference(result, output_dir, root=root, template_dir=template_dir)
-            generated.append(ref_result)
-            if args.verbose:
-                print(f"  Reference: {ref_result.get('symbols', 0)} symbols in {ref_result.get('modules', 0)} files", file=sys.stderr)
-
-        # Generate Architecture docs
-        if generate_architecture:
-            arch_result = generate_architecture_docs(
-                result,
-                output_dir,
-                provider=getattr(args, "summary_provider", None),
-                model=getattr(args, "summary_model", None),
-                api_key=getattr(args, "api_key", None),
-                template_dir=template_dir,
-            )
-            generated.append(arch_result)
-            if args.verbose:
-                print(f"  Architecture: {arch_result.get('components', 0)} components documented", file=sys.stderr)
-
-        # Generate Health docs (dependencies, complexity, env vars, imports)
-        if generate_health:
-            health_result = generate_health_docs(result, output_dir)
-            generated.append(health_result)
-            if args.verbose:
-                print(f"  Health: {len(health_result.get('files', []))} pages generated", file=sys.stderr)
-
-        # Generate unified index page (always generated as entry point)
-        index_result = generate_unified_index(result, output_dir, layers)
-        generated.append(index_result)
-        if args.verbose:
-            print(f"  Index: Created unified index.md", file=sys.stderr)
-
-        # Output summary
-        summary = {
-            "documentation": {
-                "output_dir": str(output_dir),
-                "layers": layers,
-                "generated": generated,
-            }
-        }
-        print(json.dumps(summary, indent=2))
-
-        # If --watch is specified, start watching for changes
-        if args.watch:
-            from codebase_index.analyzers.watcher import watch_and_regenerate
-
-            root = Path(args.path).resolve()
-
-            def regenerate():
-                """Regenerate documentation."""
-                # Re-scan the codebase
-                nonlocal result
-                result = scan_codebase(args, config)
-
-                # Regenerate each layer
-                if generate_api:
-                    generate_api_reference(result, output_dir, template_dir=template_dir)
-                if generate_modules:
-                    generate_module_readmes(result, output_dir, template_dir=template_dir)
-                if generate_reference:
-                    generate_function_reference(result, output_dir, root=root, template_dir=template_dir)
-                if generate_architecture:
-                    generate_architecture_docs(
-                        result,
-                        output_dir,
-                        provider=getattr(args, "summary_provider", None),
-                        model=getattr(args, "summary_model", None),
-                        api_key=getattr(args, "api_key", None),
-                        template_dir=template_dir,
-                    )
-
-            watch_and_regenerate(root, regenerate, verbose=args.verbose)
-
-        return
-
-    # Handle --doc-diff: check documentation freshness
-    if args.doc_diff:
-        from codebase_index.analyzers.doc_generator import check_doc_freshness
-
-        doc_dir = Path(args.doc_diff)
-        root = Path(args.path).resolve()
-
-        if not doc_dir.exists():
-            print(f"Error: Documentation directory '{doc_dir}' does not exist", file=sys.stderr)
-            sys.exit(1)
-
-        diff_result = check_doc_freshness(result, doc_dir, root)
-
-        if args.verbose:
-            print(f"Documentation freshness check: {diff_result.get('summary', '')}", file=sys.stderr)
-
-        print(json.dumps(diff_result, indent=2))
-        return
-
     # Handle call graph queries
     if has_cg_query:
         handle_cg_query(args, result)
@@ -932,12 +475,12 @@ def scan_codebase(args: argparse.Namespace, config: dict[str, Any]) -> dict[str,
 
     # Add directory exclusions from config
     config_exclude = config.get("exclude", {})
-    config_dirs = config_exclude.get("directories", [])
+    config_dirs = config_exclude.get("directories") or []
     if config_dirs:
         exclude.extend(config_dirs)
 
     # Add pattern exclusions from config
-    config_patterns = config_exclude.get("patterns", [])
+    config_patterns = config_exclude.get("patterns") or []
     if config_patterns:
         exclude.extend(config_patterns)
 
@@ -950,7 +493,7 @@ def scan_codebase(args: argparse.Namespace, config: dict[str, Any]) -> dict[str,
             exclude_extensions.add(ext.lower())
 
     # Add extension exclusions from config
-    config_exts = config_exclude.get("extensions", [])
+    config_exts = config_exclude.get("extensions") or []
     for ext in config_exts:
         if not ext.startswith('.'):
             ext = '.' + ext
@@ -988,16 +531,9 @@ def handle_cg_query(args: argparse.Namespace, result: dict[str, Any]) -> None:
         print("Error: No call graph data available", file=sys.stderr)
         sys.exit(1)
 
-    if args.cg_query:
-        query_result = cg_query_function(call_graph, args.cg_query)
-    elif args.cg_file:
-        query_result = cg_query_file(call_graph, args.cg_file)
-    elif args.cg_callers:
-        query_result = cg_query_callers(call_graph, args.cg_callers)
-    else:
-        return
-
-    print(json.dumps(query_result, indent=2))
+    if args.callers:
+        query_result = cg_query_callers(call_graph, args.callers)
+        print(json.dumps(query_result, indent=2))
 
 
 if __name__ == "__main__":

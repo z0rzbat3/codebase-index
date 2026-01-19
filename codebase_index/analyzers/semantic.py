@@ -111,6 +111,9 @@ class SemanticSearcher:
                 self.model_name,
                 cache_folder=str(self.cache_dir) if self.cache_dir else None,
             )
+            # Set max_seq_length to avoid position embedding overflow
+            # (RoBERTa-based models like UniXcoder have position offset issues)
+            self._model.max_seq_length = self.max_tokens
         return self._model
 
     def _encode_with_fallback(self, texts: list[str]) -> Any:
