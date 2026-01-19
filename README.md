@@ -646,6 +646,6 @@ See `parsers/python.py` for a full example with AST parsing and regex fallback.
 
 ## License
 
-Proprietary - Copyright © 2026 Schoox Inc. All rights reserved.
+Proprietary - Copyright © 2026 Schoox LLC. All rights reserved.
 
 Author: Isaak Karipidis
