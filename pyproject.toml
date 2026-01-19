@@ -7,7 +7,7 @@ name = "codebase-index"
 version = "3.0.0"
 description = "Generate comprehensive, LLM-friendly inventories of your codebase"
 readme = "README.md"
-license = "Proprietary"
+license = { text = "Proprietary - Copyright 2026 Schoox LLC" }
 requires-python = ">=3.9"
 authors = [
     { name = "Isaak Karipidis" },
