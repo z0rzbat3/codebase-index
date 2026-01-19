@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "codebase-index"
-version = "2.3.0"
+version = "3.0.0"
 description = "Generate comprehensive, LLM-friendly inventories of your codebase"
 readme = "README.md"
 license = "MIT"
