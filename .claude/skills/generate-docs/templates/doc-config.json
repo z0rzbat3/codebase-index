@@ -1,55 +1,66 @@
 {
-  "version": "1.0",
-  "description": "Documentation mapping configuration - customize for your project",
+  "version": "2.0",
+  "strategy": "mirror",
+  "description": "1:1 source-to-doc mapping - EDIT FOR YOUR PROJECT",
+
+  "source_root": "src",
+  "docs_root": "docs",
+  "index_files": true,
+
   "mappings": [
     {
-      "source": "src/api/",
-      "doc": "docs/api/API_REFERENCE.md",
-      "type": "api",
-      "description": "REST API endpoint documentation",
-      "extensions": [".py", ".ts"]
+      "source": "src/api/routers",
+      "docs": "docs/api/routers",
+      "template": "api-endpoint",
+      "extensions": [".py"]
     },
     {
-      "source": "src/db/",
-      "doc": "docs/architecture/DATABASE.md",
-      "type": "database",
-      "description": "Database schema and relationships",
-      "extensions": [".py", ".sql"]
+      "source": "src/api/services",
+      "docs": "docs/api/services",
+      "template": "module",
+      "extensions": [".py"]
     },
     {
-      "source": "src/auth/",
-      "doc": "docs/architecture/AUTHENTICATION.md",
-      "type": "module",
-      "description": "Authentication system",
-      "extensions": [".py", ".ts"]
+      "source": "src/db/models",
+      "docs": "docs/db/models",
+      "template": "db-model",
+      "extensions": [".py"]
     },
     {
-      "source": "src/frontend/",
-      "doc": "docs/architecture/FRONTEND.md",
-      "type": "frontend",
-      "description": "Frontend pages and components",
-      "extensions": [".tsx", ".ts", ".jsx", ".js"]
+      "source": "src/frontend/src/pages",
+      "docs": "docs/frontend/pages",
+      "template": "frontend-page",
+      "extensions": [".tsx", ".ts"]
     },
     {
-      "source": "src/core/",
-      "doc": "docs/architecture/CORE.md",
-      "type": "module",
-      "description": "Core business logic",
-      "extensions": [".py", ".ts"]
+      "source": "src/frontend/src/hooks",
+      "docs": "docs/frontend/hooks",
+      "template": "module",
+      "extensions": [".tsx", ".ts"]
     }
   ],
+
   "exclude": [
     "**/__pycache__/**",
+    "**/__init__.py",
     "**/*.pyc",
     "**/node_modules/**",
     "**/.git/**",
     "**/dist/**",
-    "**/.venv/**",
-    "**/venv/**"
+    "**/*.test.*",
+    "**/*.spec.*"
   ],
+
+  "validation": {
+    "check_references": true,
+    "check_symbols": true,
+    "forbidden_terms": [],
+    "required_sections": ["Overview"]
+  },
+
   "options": {
-    "create_pr": true,
-    "auto_commit": false,
-    "ci_verify_only": false
+    "max_lines_per_doc": 200,
+    "generate_index": true,
+    "include_source_link": true
   }
 }

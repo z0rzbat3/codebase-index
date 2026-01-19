@@ -1,73 +1,398 @@
 ---
 name: generate-docs
-description: Generate and maintain documentation using parallel subagents coordinated via codebase-index. Supports full generation, incremental updates, and staleness verification. Triggers on: generate docs, create documentation, document codebase, update docs, check docs, stale docs, incremental docs, verify documentation.
-allowed-tools: Bash(codebase-index:*), Bash(git:*), Bash(jq:*), Bash(md5sum:*), Bash(date:*), Bash(wc:*), Bash(cat:*), Read, Glob, Grep, Write, Task
+description: Generate and maintain documentation using 1:1 source-to-doc mirroring. Each source file gets its own doc file. Supports full generation, incremental updates, validation, and review. Triggers on: generate docs, create documentation, document codebase, update docs, check docs, stale docs, review docs, validate docs.
+allowed-tools: Bash(codebase-index:*), Bash(git:*), Bash(jq:*), Bash(md5sum:*), Bash(date:*), Bash(wc:*), Bash(find:*), Bash(mkdir:*), Read, Glob, Grep, Write, Task
 user-invocable: true
 ---
 
 # Generate & Maintain Documentation
 
-Generate and maintain documentation using parallel subagents coordinated via `codebase-index`.
+Generate documentation using **1:1 mirror strategy**: each source file gets its own doc file.
+
+## Strategy: Mirror
+
+```
+src/                          →    docs/
+├── api/                           ├── api/
+│   ├── routers/                   │   ├── routers/
+│   │   ├── agents.py              │   │   ├── agents.md
+│   │   ├── chat.py                │   │   ├── chat.md
+│   │   └── users.py               │   │   └── users.md
+│   └── services/                  │   ├── services/
+│       └── agent_service.py       │   │   └── agent_service.md
+│                                  │   └── README.md  ← Index
+├── db/                            ├── db/
+│   └── models/                    │   └── models/
+│       ├── user.py                │       ├── user.md
+│       └── session.py             │       ├── session.md
+│                                  │       └── README.md
+└── frontend/                      └── frontend/
+    └── src/                           └── src/
+        └── pages/                         └── pages/
+            ├── Dashboard.tsx                  ├── Dashboard.md
+            └── Login.tsx                      ├── Login.md
+                                               └── README.md
+```
+
+**Benefits:**
+- Small files (~50-200 lines each)
+- Change one source → update one doc
+- Easy to review, easy to find
+- Meaningful git diffs
 
 ## Modes
 
 | Mode | Command | Description |
 |------|---------|-------------|
-| **Full** | `/generate-docs` | Regenerate all documentation |
-| **Incremental** | `/generate-docs --incremental` | Only document changed files |
-| **Verify** | `/generate-docs --verify` | Check what's stale (no changes) |
-| **Diff** | `/generate-docs --diff` | Preview what would be updated |
+| **Full** | `/generate-docs` | Generate all docs |
+| **Incremental** | `/generate-docs --incremental` | Only changed files |
+| **Verify** | `/generate-docs --verify` | Check staleness |
+| **Review** | `/generate-docs --review` | Validate accuracy |
 
-## Architecture
+---
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                        .doc-manifest.json                        │
-│  Tracks: file hashes, doc locations, last updated timestamps    │
-└─────────────────────────────────────────────────────────────────┘
-                              │
-        ┌─────────────────────┼─────────────────────┐
-        ▼                     ▼                     ▼
-┌───────────────┐   ┌─────────────────┐   ┌─────────────────┐
-│  --verify     │   │  --incremental  │   │  (full)         │
-│  Compare      │   │  Regenerate     │   │  Regenerate     │
-│  hashes only  │   │  stale only     │   │  everything     │
-└───────────────┘   └─────────────────┘   └─────────────────┘
-```
-
-## Prerequisites
-
-```bash
-# Install codebase-index if needed
-which codebase-index || pip install codebase-index[semantic]
-
-# Build/update index
-codebase-index . -o index.json --build-embeddings
-```
-
-## The Manifest File
-
-`.doc-manifest.json` tracks documentation state:
+## Configuration: `.doc-config.json`
 
 ```json
 {
-  "version": "1.0",
-  "last_full_generation": "2024-01-19T20:00:00Z",
-  "index_hash": "abc123def456",
-  "source_to_doc": {
-    "src/api/routers/": {
-      "doc_path": "docs/api/API_REFERENCE.md",
-      "source_hash": "hash_of_all_files_in_dir",
-      "doc_hash": "hash_of_generated_doc",
-      "last_updated": "2024-01-19T20:00:00Z",
-      "line_count": 3483
+  "version": "2.0",
+  "strategy": "mirror",
+  "source_root": "src",
+  "docs_root": "docs",
+  "index_files": true,
+
+  "mappings": [
+    {
+      "source": "src/api/routers",
+      "docs": "docs/api/routers",
+      "template": "api-endpoint",
+      "extensions": [".py"]
     },
-    "src/db/models/": {
-      "doc_path": "docs/architecture/DATABASE_SCHEMA.md",
-      "source_hash": "...",
-      "doc_hash": "...",
-      "last_updated": "...",
-      "line_count": 816
+    {
+      "source": "src/db/models",
+      "docs": "docs/db/models",
+      "template": "db-model",
+      "extensions": [".py"]
+    },
+    {
+      "source": "src/frontend/src/pages",
+      "docs": "docs/frontend/pages",
+      "template": "frontend-page",
+      "extensions": [".tsx", ".ts"]
+    },
+    {
+      "source": "src/openai_agents",
+      "docs": "docs/agents",
+      "template": "module",
+      "extensions": [".py"]
+    }
+  ],
+
+  "exclude": [
+    "**/__pycache__/**",
+    "**/__init__.py",
+    "**/node_modules/**",
+    "**/*.test.*",
+    "**/*.spec.*"
+  ],
+
+  "validation": {
+    "check_references": true,
+    "check_symbols": true,
+    "forbidden_terms": ["chainlit", "deprecated"],
+    "required_sections": ["Overview"]
+  }
+}
+```
+
+---
+
+## Templates
+
+Templates define the structure for each doc type. Located in `.doc-templates/`.
+
+### Template: `api-endpoint.md`
+
+```markdown
+# {{filename}}
+
+> Auto-generated from `{{source_path}}`
+
+## Overview
+
+{{description}}
+
+## Endpoints
+
+{{#each endpoints}}
+### `{{method}} {{path}}`
+
+{{description}}
+
+**Auth:** {{auth_required}}
+
+**Request:**
+{{#if request_body}}
+```json
+{{request_body}}
+```
+{{/if}}
+
+**Response:**
+```json
+{{response}}
+```
+
+**Example:**
+```bash
+curl -X {{method}} http://localhost:8000{{path}}
+```
+{{/each}}
+
+## Dependencies
+
+{{dependencies}}
+
+---
+*Generated: {{timestamp}} | Source: {{source_path}}:{{line_count}} lines*
+```
+
+### Template: `db-model.md`
+
+```markdown
+# {{class_name}}
+
+> Auto-generated from `{{source_path}}`
+
+## Overview
+
+{{docstring}}
+
+## Table: `{{table_name}}`
+
+| Column | Type | Constraints | Description |
+|--------|------|-------------|-------------|
+{{#each columns}}
+| `{{name}}` | {{type}} | {{constraints}} | {{description}} |
+{{/each}}
+
+## Relationships
+
+{{#each relationships}}
+- **{{name}}**: {{type}} → `{{target}}`
+{{/each}}
+
+## Indexes
+
+{{#each indexes}}
+- `{{name}}`: {{columns}}
+{{/each}}
+
+---
+*Generated: {{timestamp}} | Source: {{source_path}}*
+```
+
+### Template: `frontend-page.md`
+
+```markdown
+# {{component_name}}
+
+> Auto-generated from `{{source_path}}`
+
+## Overview
+
+{{description}}
+
+## Route
+
+- **Path:** `{{route}}`
+- **Auth Required:** {{auth_required}}
+
+## Props
+
+| Prop | Type | Required | Description |
+|------|------|----------|-------------|
+{{#each props}}
+| `{{name}}` | `{{type}}` | {{required}} | {{description}} |
+{{/each}}
+
+## Hooks Used
+
+{{#each hooks}}
+- `{{name}}`: {{description}}
+{{/each}}
+
+## State
+
+{{#each state}}
+- `{{name}}`: `{{type}}`
+{{/each}}
+
+---
+*Generated: {{timestamp}} | Source: {{source_path}}*
+```
+
+### Template: `module.md`
+
+```markdown
+# {{module_name}}
+
+> Auto-generated from `{{source_path}}`
+
+## Overview
+
+{{docstring}}
+
+## Classes
+
+{{#each classes}}
+### `{{name}}`
+
+{{docstring}}
+
+#### Methods
+
+{{#each methods}}
+- `{{signature}}`: {{description}}
+{{/each}}
+{{/each}}
+
+## Functions
+
+{{#each functions}}
+### `{{name}}({{params}})`
+
+{{docstring}}
+
+**Returns:** `{{return_type}}`
+{{/each}}
+
+## Usage
+
+```python
+{{usage_example}}
+```
+
+---
+*Generated: {{timestamp}} | Source: {{source_path}}*
+```
+
+### Template: `index.md` (README.md for directories)
+
+```markdown
+# {{directory_name}}
+
+> Index for `{{source_directory}}`
+
+## Contents
+
+{{#each files}}
+- [{{name}}]({{link}}) - {{description}}
+{{/each}}
+
+## Overview
+
+{{directory_description}}
+
+## Quick Reference
+
+| File | Type | Lines | Last Updated |
+|------|------|-------|--------------|
+{{#each files}}
+| [{{name}}]({{link}}) | {{type}} | {{lines}} | {{updated}} |
+{{/each}}
+```
+
+---
+
+## Execution Steps
+
+### Step 1: Load Configuration
+
+```bash
+# Check for config
+if [ ! -f .doc-config.json ]; then
+  echo "No .doc-config.json found. Creating default..."
+  # Create default config
+fi
+
+# Load config
+CONFIG=$(cat .doc-config.json)
+```
+
+### Step 2: Query Index for Files
+
+```bash
+# Get all source files from index
+codebase-index --load index.json --keys file_index
+
+# For each mapping, get matching files
+codebase-index --load index.json --path "file_index" | \
+  jq -r '.[] | select(.path | startswith("src/api/routers"))'
+```
+
+### Step 3: Generate Docs (Parallel by Directory)
+
+For each mapping in config:
+
+1. **List source files**
+```bash
+find src/api/routers -name "*.py" -type f | grep -v __pycache__
+```
+
+2. **Create output directory**
+```bash
+mkdir -p docs/api/routers
+```
+
+3. **Spawn subagent for each file** (batch by directory for efficiency)
+
+```
+Use Task tool with:
+  subagent_type: "documentation-knowledge"
+  prompt: |
+    Document this single file using the api-endpoint template.
+
+    Source: src/api/routers/agents.py
+    Output: docs/api/routers/agents.md
+    Template: api-endpoint
+
+    Read the source file, extract:
+    - All endpoints (method, path, auth, request/response)
+    - Dependencies
+    - Any docstrings
+
+    Generate markdown following the template structure.
+    Keep it concise: aim for 50-150 lines.
+```
+
+4. **Generate index file**
+```
+After all files in directory are done:
+  Generate docs/api/routers/README.md
+  List all documented files with descriptions
+```
+
+### Step 4: Update Manifest
+
+```json
+{
+  "version": "2.0",
+  "strategy": "mirror",
+  "last_updated": "2024-01-19T20:00:00Z",
+  "files": {
+    "src/api/routers/agents.py": {
+      "doc_path": "docs/api/routers/agents.md",
+      "source_hash": "abc123",
+      "doc_hash": "def456",
+      "last_updated": "2024-01-19T20:00:00Z",
+      "line_count": 85
+    }
+  },
+  "indexes": {
+    "docs/api/routers/README.md": {
+      "source_dir": "src/api/routers",
+      "last_updated": "2024-01-19T20:00:00Z"
     }
   }
 }
@@ -75,335 +400,160 @@ codebase-index . -o index.json --build-embeddings
 
 ---
 
-## Mode: Full Generation
+## Mode: Incremental (`--incremental`)
 
-**When:** First run, major refactors, or forced refresh.
-
-```
-/generate-docs
-/generate-docs src/api src/db src/auth
-```
-
-### Steps
-
-1. **Query index for structure**
-```bash
-codebase-index --load index.json --summary
-codebase-index --load index.json --keys file_index
-```
-
-2. **Identify non-overlapping documentation areas**
-
-Good divisions:
-- `src/api/routers/` → `docs/api/API_REFERENCE.md`
-- `src/db/models/` → `docs/architecture/DATABASE_SCHEMA.md`
-- `src/auth/` → `docs/architecture/AUTHENTICATION.md`
-- `src/frontend/src/pages/` → `docs/architecture/FRONTEND.md`
-- `src/core/` → `docs/architecture/CORE.md`
-
-3. **Spawn parallel documentation-knowledge subagents**
-
-For each area, use Task tool:
-```
-subagent_type: "documentation-knowledge"
-run_in_background: true
-prompt: [Include files, output path, scope]
-```
-
-4. **Update manifest after completion**
+Only regenerate docs for changed source files.
 
 ```bash
-# Calculate source hash for a directory
-find src/api/routers -name "*.py" -exec md5sum {} \; | sort | md5sum | cut -d' ' -f1
+# 1. Get changed files since last generation
+CHANGED=$(find src -newer .doc-manifest.json -name "*.py" -o -name "*.ts" -o -name "*.tsx")
 
-# Calculate doc hash
-md5sum docs/api/API_REFERENCE.md | cut -d' ' -f1
-```
+# 2. For each changed file, check if it has a mapping
+for file in $CHANGED; do
+  # Find matching mapping
+  # Regenerate only that doc
+done
 
-5. **Write updated .doc-manifest.json**
-
----
-
-## Mode: Verify (--verify)
-
-**When:** Pre-commit check, CI validation, checking doc health.
-
-```
-/generate-docs --verify
-```
-
-### Steps
-
-1. **Load manifest**
-```bash
-cat .doc-manifest.json
-```
-
-2. **For each source_to_doc entry, compare current hash to stored hash**
-
-```bash
-# Current source hash
-CURRENT=$(find src/api/routers -name "*.py" -exec md5sum {} \; | sort | md5sum | cut -d' ' -f1)
-
-# Stored hash from manifest
-STORED=$(jq -r '.source_to_doc["src/api/routers/"].source_hash' .doc-manifest.json)
-
-# Compare
-if [ "$CURRENT" != "$STORED" ]; then
-  echo "STALE: src/api/routers/ → docs/api/API_REFERENCE.md"
-fi
-```
-
-3. **Output staleness report**
-
-```
-Documentation Status:
-✅ docs/api/API_REFERENCE.md (up to date)
-⚠️  docs/architecture/DATABASE_SCHEMA.md (STALE - src/db/models/ changed)
-✅ docs/architecture/AUTHENTICATION.md (up to date)
-⚠️  docs/architecture/FRONTEND.md (STALE - src/frontend/src/pages/ changed)
-❌ docs/architecture/CORE.md (MISSING - src/core/ not documented)
-
-Summary: 2 stale, 1 missing, 2 current
-```
-
-4. **Exit with code indicating staleness**
-- Exit 0: All docs current
-- Exit 1: Some docs stale (useful for CI gates)
-
----
-
-## Mode: Incremental (--incremental)
-
-**When:** Regular maintenance, post-commit updates.
-
-```
-/generate-docs --incremental
-```
-
-### Steps
-
-1. **Run verify to identify stale docs**
-
-2. **For each stale entry, regenerate only that doc**
-
-```
-# Only spawn subagents for stale areas
-If src/db/models/ is stale:
-  → Spawn documentation-knowledge for DATABASE_SCHEMA.md only
-
-If src/api/routers/ is current:
-  → Skip, don't regenerate
-```
-
-3. **Update manifest entries for regenerated docs only**
-
-4. **Report what was updated**
-
-```
-Incremental Documentation Update:
-  Regenerated: docs/architecture/DATABASE_SCHEMA.md (816 lines)
-  Regenerated: docs/architecture/FRONTEND.md (796 lines)
-  Skipped: 3 docs (already current)
-
-Total: 2 regenerated, 3 skipped
+# 3. Update affected index files
 ```
 
 ---
 
-## Mode: Diff (--diff)
+## Mode: Review (`--review`)
 
-**When:** Preview before committing to regeneration.
+Validate generated docs against codebase.
+
+### Checks
+
+1. **Reference Validation**
+   - All `file:line` references exist
+   - All function/class names exist in index
+
+2. **Symbol Validation**
+   - Documented symbols match actual code
+   - No phantom/removed symbols
+
+3. **Term Validation**
+   - No forbidden terms (from config)
+   - No references to removed technologies
+
+4. **Completeness**
+   - All required sections present
+   - No empty sections
+
+### Review Output
 
 ```
-/generate-docs --diff
+Documentation Review Report
+===========================
+
+docs/api/routers/agents.md
+  ✅ All references valid
+  ✅ All symbols found
+  ✅ No forbidden terms
+  ⚠️  Missing section: Usage Examples
+
+docs/db/models/user.md
+  ❌ Invalid reference: src/db/models/user.py:250 (file has 180 lines)
+  ❌ Forbidden term found: "chainlit" on line 45
+  ✅ All required sections present
+
+Summary: 15 files reviewed, 2 issues found
 ```
 
-### Steps
-
-1. **Run verify to identify stale docs**
-
-2. **For each stale entry, show what would change**
-
-```
-Documentation Diff Preview:
-
-src/db/models/ → docs/architecture/DATABASE_SCHEMA.md
-  Source changes:
-    M src/db/models/user.py (added 2 columns)
-    A src/db/models/audit_log.py (new file)
-  Expected doc changes:
-    + New table: audit_log
-    + New columns in user table
-
-src/frontend/src/pages/ → docs/architecture/FRONTEND.md
-  Source changes:
-    M src/frontend/src/pages/Dashboard.tsx (refactored)
-  Expected doc changes:
-    ~ Updated Dashboard page documentation
-
-Run '/generate-docs --incremental' to apply these changes.
-```
-
----
-
-## Documentation Mapping Configuration
-
-Create `.doc-config.json` to define source-to-doc mappings:
-
-```json
-{
-  "mappings": [
-    {
-      "source": "src/api/routers/",
-      "doc": "docs/api/API_REFERENCE.md",
-      "type": "api",
-      "description": "REST API endpoint documentation"
-    },
-    {
-      "source": "src/db/models/",
-      "doc": "docs/architecture/DATABASE_SCHEMA.md",
-      "type": "database",
-      "description": "Database schema and relationships"
-    },
-    {
-      "source": "src/auth/",
-      "doc": "docs/architecture/AUTHENTICATION.md",
-      "type": "module",
-      "description": "Authentication system"
-    },
-    {
-      "source": "src/frontend/src/pages/",
-      "doc": "docs/architecture/FRONTEND.md",
-      "type": "frontend",
-      "description": "Frontend pages and components"
-    },
-    {
-      "source": "src/openai_agents/",
-      "doc": "docs/architecture/AGENT_FRAMEWORK.md",
-      "type": "module",
-      "description": "Agent framework core"
-    }
-  ],
-  "exclude": [
-    "**/__pycache__/**",
-    "**/*.pyc",
-    "**/node_modules/**",
-    "**/.git/**"
-  ]
-}
-```
-
----
-
-## Helper Scripts
-
-### Calculate Directory Hash
+### Review Commands
 
 ```bash
-calc_dir_hash() {
-  local dir="$1"
-  local ext="${2:-py}"
-  find "$dir" -name "*.$ext" -type f -exec md5sum {} \; 2>/dev/null | sort | md5sum | cut -d' ' -f1
-}
+# Full review
+/generate-docs --review
 
-# Usage
-calc_dir_hash "src/api/routers" "py"
-calc_dir_hash "src/frontend/src/pages" "tsx"
-```
+# Review specific directory
+/generate-docs --review docs/api/
 
-### Check Single Mapping Staleness
-
-```bash
-check_stale() {
-  local source="$1"
-  local manifest=".doc-manifest.json"
-
-  current=$(find "$source" -type f \( -name "*.py" -o -name "*.tsx" -o -name "*.ts" \) -exec md5sum {} \; 2>/dev/null | sort | md5sum | cut -d' ' -f1)
-  stored=$(jq -r --arg src "$source" '.source_to_doc[$src].source_hash // "none"' "$manifest")
-
-  if [ "$current" != "$stored" ]; then
-    echo "STALE"
-  else
-    echo "CURRENT"
-  fi
-}
-```
-
-### Initialize Manifest
-
-```bash
-init_manifest() {
-  cat > .doc-manifest.json << 'EOF'
-{
-  "version": "1.0",
-  "last_full_generation": null,
-  "index_hash": null,
-  "source_to_doc": {}
-}
-EOF
-}
+# Review and auto-fix (regenerate invalid docs)
+/generate-docs --review --fix
 ```
 
 ---
 
-## Integration with Git Hooks
+## Parallel Execution Strategy
 
-### Pre-commit (fast staleness check)
+Divide work by directory to avoid conflicts:
 
-The pre-commit hook should:
-1. Update index.json (existing behavior)
-2. Run quick staleness check
-3. Warn (don't block) if docs are stale
+```
+Batch 1: src/api/routers/*.py    → docs/api/routers/
+Batch 2: src/api/services/*.py   → docs/api/services/
+Batch 3: src/db/models/*.py      → docs/db/models/
+Batch 4: src/frontend/pages/*.tsx → docs/frontend/pages/
+Batch 5: src/openai_agents/*.py  → docs/agents/
+```
 
-See: `.git/hooks/pre-commit` or `.github/hooks/pre-commit`
-
-### CI/CD (actual regeneration)
-
-GitHub Action should:
-1. Run on merge to main/develop
-2. Execute `/generate-docs --incremental`
-3. Commit updated docs or create PR
-
-See: `.github/workflows/docs-maintenance.yml`
-
----
-
-## Best Practices
-
-1. **Initialize manifest early** - Run full generation to create baseline
-2. **Configure mappings** - Create `.doc-config.json` for your project
-3. **Use --verify in CI** - Fail builds if docs are stale
-4. **Use --incremental for updates** - Don't regenerate unchanged docs
-5. **Review --diff before applying** - Understand what will change
-6. **Commit manifest with docs** - Track state in version control
-
----
-
-## Troubleshooting
-
-| Issue | Solution |
-|-------|----------|
-| No manifest found | Run `/generate-docs` (full) first to create it |
-| All docs show stale | Manifest may be outdated; run full generation |
-| Hash mismatch on unchanged files | Check for whitespace/formatting changes |
-| Incremental misses files | Update `.doc-config.json` mappings |
-| CI fails on staleness | Run `/generate-docs --incremental` locally first |
+Each batch runs in parallel as a separate subagent. Within each batch, files are processed sequentially to maintain consistency.
 
 ---
 
 ## Quick Reference
 
 ```bash
-# First time setup
-/generate-docs                    # Full generation, creates manifest
+# Setup
+./scripts/setup-doc-maintenance.sh
 
-# Regular maintenance
-/generate-docs --verify           # Check what's stale
-/generate-docs --diff             # Preview changes
-/generate-docs --incremental      # Update stale docs only
+# Full generation
+/generate-docs
 
-# Specific areas
-/generate-docs src/api src/db     # Full generation for specific dirs
-/generate-docs --incremental src/api  # Incremental for specific dir
+# Check what's stale
+/generate-docs --verify
+
+# Update only changed
+/generate-docs --incremental
+
+# Validate accuracy
+/generate-docs --review
+
+# Specific directory
+/generate-docs src/api/routers
+
+# Review and fix
+/generate-docs --review --fix
+```
+
+---
+
+## File Size Guidelines
+
+| Doc Type | Target Lines | Max Lines |
+|----------|--------------|-----------|
+| API endpoint | 50-150 | 200 |
+| DB model | 30-80 | 120 |
+| Frontend page | 40-100 | 150 |
+| Module | 50-150 | 200 |
+| Index (README) | 20-50 | 80 |
+
+If a doc exceeds max lines, consider splitting the source file.
+
+---
+
+## Migration from v1 (Monolithic)
+
+If you have existing monolithic docs:
+
+1. **Archive old docs**
+```bash
+mv docs/api/API_REFERENCE.md .archive/docs/
+```
+
+2. **Update config to v2**
+```bash
+# Change strategy to "mirror"
+jq '.strategy = "mirror" | .version = "2.0"' .doc-config.json > tmp && mv tmp .doc-config.json
+```
+
+3. **Run full generation**
+```bash
+/generate-docs
+```
+
+4. **Review and validate**
+```bash
+/generate-docs --review
 ```
