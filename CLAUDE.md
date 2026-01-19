@@ -28,6 +28,24 @@ codebase-index --load index.json --search "error handling with retry"
 ```
 Finds code by meaning, not just keywords.
 
+### 5. Index navigation (surgical extraction)
+```bash
+# See index structure
+codebase-index --load index.json --schema
+
+# List keys at any level
+codebase-index --load index.json --keys              # root keys
+codebase-index --load index.json --keys symbol_index # drill down
+
+# Find symbol by name (partial match)
+codebase-index --load index.json --get CodebaseScanner
+
+# Extract specific data
+codebase-index --load index.json --path summary.total_files
+codebase-index --load index.json --path symbol_index.functions --limit 5
+```
+For large indexes: explore structure without loading everything into context.
+
 ## Still Use Native Tools For:
 - Reading specific files → `Read`
 - Simple text search → `Grep`
