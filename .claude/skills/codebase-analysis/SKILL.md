@@ -1,6 +1,6 @@
 ---
 name: codebase-analysis
-description: Analyze code structure, find function callers, measure change impact, and search code semantically. Use when asked about dependencies, what calls a function, impact of changes, code architecture, or finding code by concept.
+description: Explore codebase, analyze code, review code, assess code quality, evaluate architecture, find callers, measure impact, search semantically, generate documentation. Triggers on: dependencies, what calls, who calls, what uses, callers, impact, blast radius, code architecture, find function, search code, explore codebase, analyse code, review code, review documentation, document, create documentation, evaluate, assess.
 allowed-tools: Bash(codebase-index:*), Bash(pip:*), Bash(cp:*), Bash(chmod:*), Bash(mkdir:*), Read, Glob, Write
 user-invocable: true
 ---
