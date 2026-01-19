@@ -1,45 +1,121 @@
-# Codebase-Index Documentation
+# codebase-index Documentation
 
-> Auto-generated using `codebase-index` on itself
+> Auto-generated using mirror strategy v2.0
 
-## Documentation Files
+## Documentation Structure
 
-| File | Description | Lines |
-|------|-------------|-------|
-| [ARCHITECTURE.md](ARCHITECTURE.md) | High-level architecture, diagrams, module overview | 152 |
-| [API.md](API.md) | API documentation with all classes and methods | 1,370 |
-| [FULL_REFERENCE.md](FULL_REFERENCE.md) | Complete reference with method signatures and call graph | 3,213 |
+```
+docs/
+├── README.md           ← You are here
+├── core/               ← Main modules (cli, scanner, config, etc.)
+│   ├── README.md
+│   ├── call_graph.md
+│   ├── cli.md
+│   ├── config.md
+│   ├── incremental.md
+│   ├── scanner.md
+│   └── utils.md
+├── parsers/            ← Language-specific parsers
+│   ├── README.md
+│   ├── base.md
+│   ├── docker.md
+│   ├── python.md
+│   ├── sql.md
+│   └── typescript.md
+├── analyzers/          ← Analysis tools
+│   ├── README.md
+│   ├── auth.md
+│   ├── centrality.md
+│   ├── complexity.md
+│   ├── coverage.md
+│   ├── doc_generator.md
+│   ├── execution_flow.md
+│   ├── impact.md
+│   ├── imports.md
+│   ├── orphans.md
+│   ├── semantic.md
+│   ├── staleness.md
+│   └── test_mapper.md
+└── scanners/           ← Domain-specific scanners
+    ├── README.md
+    ├── alembic.md
+    ├── dependencies.md
+    ├── env.md
+    ├── http_calls.md
+    ├── middleware.md
+    ├── routes.md
+    ├── todo.md
+    └── websocket.md
+```
 
 ## Quick Links
 
-### Architecture
-- [Module Dependency Graph](ARCHITECTURE.md#architecture)
-- [Data Flow](ARCHITECTURE.md#data-flow)
-- [Output Schema](ARCHITECTURE.md#output-schema)
+### Core
 
-### API Reference
-- [Core Classes](FULL_REFERENCE.md#core-classes)
-- [Parsers](FULL_REFERENCE.md#parsers)
-- [Scanners](FULL_REFERENCE.md#scanners)
-- [Analyzers](FULL_REFERENCE.md#analyzers)
-- [Call Graph](FULL_REFERENCE.md#call-graph)
+| Module | Description |
+|--------|-------------|
+| [cli](core/cli.md) | Command-line interface |
+| [scanner](core/scanner.md) | Main orchestrator |
+| [config](core/config.md) | Configuration system |
+| [call_graph](core/call_graph.md) | Call graph queries |
+| [incremental](core/incremental.md) | Incremental updates |
+| [utils](core/utils.md) | Utility functions |
+
+### Parsers
+
+| Parser | Languages | Approach |
+|--------|-----------|----------|
+| [PythonParser](parsers/python.md) | Python | AST |
+| [TypeScriptParser](parsers/typescript.md) | TS/JS/React | Regex |
+| [SQLParser](parsers/sql.md) | SQL | Regex |
+| [DockerParser](parsers/docker.md) | Docker Compose | YAML |
+
+### Analyzers
+
+| Analyzer | Purpose |
+|----------|---------|
+| [ImpactAnalyzer](analyzers/impact.md) | Change impact radius |
+| [SemanticSearcher](analyzers/semantic.md) | Code search by concept |
+| [TestMapper](analyzers/test_mapper.md) | Symbol to test mapping |
+| [ComplexityAnalyzer](analyzers/complexity.md) | Code complexity |
+| [AuthScanner](analyzers/auth.md) | Auth requirements |
+| [StalenessChecker](analyzers/staleness.md) | Index freshness |
+
+### Scanners
+
+| Scanner | Detects |
+|---------|---------|
+| [DependenciesScanner](scanners/dependencies.md) | Package deps |
+| [EnvScanner](scanners/env.md) | Environment vars |
+| [TodoScanner](scanners/todo.md) | TODO comments |
+| [HttpCallsScanner](scanners/http_calls.md) | External APIs |
+| [RoutePrefixScanner](scanners/routes.md) | API prefixes |
 
 ## Regenerating Documentation
 
 ```bash
-# Generate fresh index
-codebase-index . --exclude-dirs .git __pycache__ outputs -o /tmp/self_index.json
+# Full regeneration
+/generate-docs
 
-# The documentation was generated using Python scripts that parse this index
-# See the main README for usage instructions
+# Incremental (changed files only)
+/generate-docs --incremental
+
+# Review for accuracy
+/generate-docs --review
+
+# Review and auto-fix
+/generate-docs --review --fix
 ```
 
 ## Coverage
 
-| Metric | Count |
-|--------|-------|
-| Files Documented | 37 |
-| Classes | 46 |
-| Methods | 244 |
-| Functions | 41 |
-| Documentation Coverage | 97% |
+| Category | Files | Documented |
+|----------|-------|------------|
+| Core | 6 | 6 |
+| Parsers | 5 | 5 |
+| Analyzers | 12 | 12 |
+| Scanners | 8 | 8 |
+| **Total** | **31** | **31** |
+
+---
+*Generated with mirror strategy v2.0*

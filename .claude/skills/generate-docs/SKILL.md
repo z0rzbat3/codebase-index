@@ -3,11 +3,26 @@ name: generate-docs
 description: Generate and maintain documentation using 1:1 source-to-doc mirroring. Each source file gets its own doc file. Supports full generation, incremental updates, validation, and review. Triggers on: generate docs, create documentation, document codebase, update docs, check docs, stale docs, review docs, validate docs.
 allowed-tools: Bash(codebase-index:*), Bash(git:*), Bash(jq:*), Bash(md5sum:*), Bash(date:*), Bash(wc:*), Bash(find:*), Bash(mkdir:*), Read, Glob, Grep, Write, Task
 user-invocable: true
+subagent: doc-generator
 ---
 
 # Generate & Maintain Documentation
 
 Generate documentation using **1:1 mirror strategy**: each source file gets its own doc file.
+
+## Subagent (MANDATORY)
+
+**Definition:** `.claude/agents/doc-generator.md`
+
+**⚠️ ALL documentation operations MUST use `doc-generator` subagent:**
+- Generate → doc-generator
+- Review → doc-generator
+- Fix → doc-generator
+- Incremental → doc-generator
+
+**Do NOT use:** ai-dev, documentation-knowledge, Explore, or any other subagent for doc work.
+
+The skill spawns `doc-generator` clones in parallel. Each clone handles one directory assignment. See the subagent definition for its protocol and scope.
 
 ## Strategy: Mirror
 
@@ -99,7 +114,7 @@ src/                          →    docs/
   "validation": {
     "check_references": true,
     "check_symbols": true,
-    "forbidden_terms": ["chainlit", "deprecated"],
+    "forbidden_terms": [],
     "required_sections": ["Overview"]
   }
 }
@@ -331,47 +346,47 @@ codebase-index --load index.json --path "file_index" | \
   jq -r '.[] | select(.path | startswith("src/api/routers"))'
 ```
 
-### Step 3: Generate Docs (Parallel by Directory)
+### Step 3: Generate Docs (Parallel Clones)
 
-For each mapping in config:
+**Spawn doc-generator clones in parallel - one per mapping:**
 
-1. **List source files**
-```bash
-find src/api/routers -name "*.py" -type f | grep -v __pycache__
+```python
+# Orchestrator builds inventory from config
+inventory = []
+for mapping in config["mappings"]:
+    inventory.append({
+        "source_dir": mapping["source"],
+        "docs_dir": mapping["docs"],
+        "template": mapping["template"],
+        "extensions": mapping["extensions"]
+    })
+
+# Spawn ALL clones in ONE message (parallel)
+for item in inventory:
+    Task(
+        subagent_type="doc-generator",
+        prompt=f"""
+ASSIGNMENT:
+  source_dir: {item["source_dir"]}
+  docs_dir: {item["docs_dir"]}
+  template: {item["template"]}
+  extensions: {item["extensions"]}
+  forbidden_terms: {config["validation"]["forbidden_terms"]}
+  max_lines: {config["options"]["max_lines_per_doc"]}
+
+Generate docs for this directory following the doc-generator protocol.
+""",
+        description=f"Generate {item['docs_dir']} docs"
+    )
 ```
 
-2. **Create output directory**
-```bash
-mkdir -p docs/api/routers
-```
+**Key: All Task calls in SINGLE message = parallel execution**
 
-3. **Spawn subagent for each file** (batch by directory for efficiency)
-
-```
-Use Task tool with:
-  subagent_type: "documentation-knowledge"
-  prompt: |
-    Document this single file using the api-endpoint template.
-
-    Source: src/api/routers/agents.py
-    Output: docs/api/routers/agents.md
-    Template: api-endpoint
-
-    Read the source file, extract:
-    - All endpoints (method, path, auth, request/response)
-    - Dependencies
-    - Any docstrings
-
-    Generate markdown following the template structure.
-    Keep it concise: aim for 50-150 lines.
-```
-
-4. **Generate index file**
-```
-After all files in directory are done:
-  Generate docs/api/routers/README.md
-  List all documented files with descriptions
-```
+Each clone:
+- Reads its assigned source directory
+- Writes docs to its assigned docs directory
+- Creates README.md index
+- Reports completion
 
 ### Step 4: Update Manifest
 
@@ -421,25 +436,76 @@ done
 
 ## Mode: Review (`--review`)
 
-Validate generated docs against codebase.
+Validate docs against actual source code.
+
+### ⚠️ MANDATORY: 100% Coverage
+
+**Review ALL docs. No sampling. No exceptions.**
+
+```
+1. List ALL .md files in docs_root recursively
+2. For EACH file, run ALL validation checks
+3. Report issues for EVERY file
+4. With --fix: Fix ALL issues found
+```
+
+**Do NOT:**
+- Sample "a few files" for validation
+- Skip files because they're "not in mappings"
+- Ignore legacy/architecture docs
+
+### Validation Scope
+
+**Validation rules apply to ALL files in `docs_root`:**
+- Mirror-mapped docs (from config mappings)
+- Legacy docs (architecture/, development/, guides/)
+- Contributing docs
+- ALL .md files without exception
+
+If a doc has forbidden terms → fix it or delete it
+If a doc has invalid symbols → regenerate it
+No file gets a pass.
 
 ### Checks
 
-1. **Reference Validation**
-   - All `file:line` references exist
-   - All function/class names exist in index
+1. **Symbol Accuracy** (MOST IMPORTANT)
+   - Read source file and doc file side-by-side
+   - Verify documented classes/functions actually exist
+   - Check if method signatures match
+   - Detect renamed/removed symbols documented as if they exist
 
-2. **Symbol Validation**
-   - Documented symbols match actual code
-   - No phantom/removed symbols
+2. **Reference Validation**
+   - All `file:line` references are within file bounds
+   - All linked files actually exist
 
-3. **Term Validation**
-   - No forbidden terms (from config)
-   - No references to removed technologies
+3. **Content Drift**
+   - Compare doc descriptions to source docstrings
+   - Flag docs that describe different behavior than code
+   - Detect outdated examples
 
-4. **Completeness**
+4. **Forbidden Terms** (applies to ALL docs)
+   - Check for terms in `forbidden_terms` config array
+   - Applies to ALL .md files in docs_root, not just mapped docs
+   - If found: delete the term, rewrite the section, or delete the file
+   - No exceptions - legacy docs get fixed too
+
+5. **Completeness**
    - All required sections present
    - No empty sections
+
+### Review Process
+
+**Do NOT just grep for banned words.** Actually compare doc to source:
+
+```
+For each doc file:
+  1. Read the doc file
+  2. Read the corresponding source file
+  3. Extract symbols from source (classes, functions, methods)
+  4. Extract documented symbols from doc
+  5. Compare: Are documented symbols in source? Are descriptions accurate?
+  6. Report discrepancies
+```
 
 ### Review Output
 
@@ -448,14 +514,13 @@ Documentation Review Report
 ===========================
 
 docs/api/routers/agents.md
-  ✅ All references valid
-  ✅ All symbols found
-  ✅ No forbidden terms
+  ✅ All symbols verified in source
+  ✅ Line references valid
   ⚠️  Missing section: Usage Examples
 
 docs/db/models/user.md
+  ❌ Symbol mismatch: Doc says `get_by_email()` but source has `find_by_email()`
   ❌ Invalid reference: src/db/models/user.py:250 (file has 180 lines)
-  ❌ Forbidden term found: "chainlit" on line 45
   ✅ All required sections present
 
 Summary: 15 files reviewed, 2 issues found
@@ -476,19 +541,85 @@ Summary: 15 files reviewed, 2 issues found
 
 ---
 
-## Parallel Execution Strategy
+## Execution Strategy
 
-Divide work by directory to avoid conflicts:
+**Pattern: Orchestrator + Parallel Subagent Clones**
 
 ```
-Batch 1: src/api/routers/*.py    → docs/api/routers/
-Batch 2: src/api/services/*.py   → docs/api/services/
-Batch 3: src/db/models/*.py      → docs/db/models/
-Batch 4: src/frontend/pages/*.tsx → docs/frontend/pages/
-Batch 5: src/openai_agents/*.py  → docs/agents/
+Orchestrator (you)
+    |
+    ├── Read .doc-config.json
+    ├── Build inventory/checklist from mappings
+    ├── Spawn N doc-generator clones in parallel
+    |       |
+    |       ├── Clone 1: src/api/routers → docs/api/routers
+    |       ├── Clone 2: src/api/services → docs/api/services
+    |       ├── Clone 3: src/db/models → docs/db/models
+    |       └── Clone N: ...
+    |
+    └── Collect results, report summary
 ```
 
-Each batch runs in parallel as a separate subagent. Within each batch, files are processed sequentially to maintain consistency.
+### Subagent: `doc-generator`
+
+Each clone is a `doc-generator` subagent (defined in `.claude/agents/doc-generator.md`) with:
+- **Scope**: One directory assignment only
+- **Permissions**: Read source, Write docs (in assigned dir only)
+- **Output**: Completion report with file count
+
+### Spawning Pattern
+
+```
+# Spawn ALL clones in a SINGLE message (parallel execution)
+# Each clone gets one assignment from the inventory
+
+Task tool call 1:
+  subagent_type: "doc-generator"
+  prompt: "ASSIGNMENT: source_dir=src/api/routers, docs_dir=docs/api/routers, template=api-endpoint..."
+
+Task tool call 2:
+  subagent_type: "doc-generator"
+  prompt: "ASSIGNMENT: source_dir=src/api/services, docs_dir=docs/api/services, template=module..."
+
+Task tool call 3:
+  subagent_type: "doc-generator"
+  prompt: "ASSIGNMENT: source_dir=src/db/models, docs_dir=docs/db/models, template=db-model..."
+
+# All 3 run in parallel
+```
+
+### Why This Works
+
+1. **True parallelism**: Multiple clones work simultaneously
+2. **Clear scope**: Each clone knows exactly its assignment
+3. **Isolated writes**: No conflicts, each writes to different dir
+4. **Scalable**: 5 dirs = 5 clones, 20 dirs = 20 clones
+
+### Permission Handling
+
+**Current behavior:** Each clone may prompt for write permission.
+
+**Ideal behavior:** Pre-approve docs/ directory writes at skill invocation.
+
+**Workaround:** If permission prompts are disruptive:
+- Approve "Write to docs/" on first prompt
+- Session should cache for subsequent writes to same directory tree
+- Or: Run with `--dangerously-skip-permissions` if you trust the operation
+
+### Inventory Format
+
+Before spawning, orchestrator builds checklist:
+
+```
+INVENTORY (from .doc-config.json):
+[ ] src/api/routers → docs/api/routers (api-endpoint, .py)
+[ ] src/api/services → docs/api/services (module, .py)
+[ ] src/db/models → docs/db/models (db-model, .py)
+[ ] src/frontend/pages → docs/frontend/pages (frontend-page, .tsx)
+...
+```
+
+Then spawn one clone per checklist item, all in parallel.
 
 ---
 

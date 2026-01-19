@@ -172,13 +172,14 @@ jobs:
           echo "Running documentation generation in $MODE mode"
           echo "Stale areas: $STALE"
 
-          # Invoke Claude with the generate-docs skill
+          # Invoke Claude Code with the generate-docs skill
+          # Using -p for non-interactive mode, --dangerously-skip-permissions for CI
           if [ "$MODE" == "full" ]; then
-            claude --skill generate-docs --print "Generate full documentation for this codebase. Create .doc-manifest.json to track state."
+            claude -p "/generate-docs" --dangerously-skip-permissions --verbose
           elif [ "$MODE" == "incremental" ]; then
-            claude --skill generate-docs --print "Run incremental documentation update. Stale areas: $STALE. Only regenerate documentation for stale areas."
+            claude -p "/generate-docs --incremental" --dangerously-skip-permissions --verbose
           else
-            claude --skill generate-docs --print "Verify documentation staleness and report status."
+            claude -p "/generate-docs --verify" --dangerously-skip-permissions --verbose
           fi
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}

@@ -1,0 +1,50 @@
+{
+  "version": "2.0",
+  "strategy": "mirror",
+  "source_root": "codebase_index",
+  "docs_root": "docs",
+  "index_files": true,
+
+  "mappings": [
+    {
+      "source": "codebase_index/parsers",
+      "docs": "docs/parsers",
+      "template": "module",
+      "extensions": [".py"]
+    },
+    {
+      "source": "codebase_index/analyzers",
+      "docs": "docs/analyzers",
+      "template": "module",
+      "extensions": [".py"]
+    },
+    {
+      "source": "codebase_index/scanners",
+      "docs": "docs/scanners",
+      "template": "module",
+      "extensions": [".py"]
+    },
+    {
+      "source": "codebase_index",
+      "docs": "docs/core",
+      "template": "module",
+      "extensions": [".py"],
+      "depth": 0
+    }
+  ],
+
+  "exclude": [
+    "**/__pycache__/**",
+    "**/__init__.py",
+    "**/__main__.py",
+    "**/test_*.py",
+    "**/*_test.py"
+  ],
+
+  "validation": {
+    "check_references": true,
+    "check_symbols": true,
+    "forbidden_terms": [],
+    "required_sections": ["Overview"]
+  }
+}

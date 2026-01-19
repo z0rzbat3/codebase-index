@@ -1,0 +1,184 @@
+{
+  "version": "2.0",
+  "strategy": "mirror",
+  "last_updated": "2026-01-19T21:24:00Z",
+  "files": {
+    "codebase_index/parsers/base.py": {
+      "doc_path": "docs/parsers/base.md",
+      "line_count": 80,
+      "last_updated": "2026-01-19T21:22:11Z"
+    },
+    "codebase_index/parsers/docker.py": {
+      "doc_path": "docs/parsers/docker.md",
+      "line_count": 81,
+      "last_updated": "2026-01-19T21:22:11Z"
+    },
+    "codebase_index/parsers/python.py": {
+      "doc_path": "docs/parsers/python.md",
+      "line_count": 102,
+      "last_updated": "2026-01-19T21:22:11Z"
+    },
+    "codebase_index/parsers/sql.py": {
+      "doc_path": "docs/parsers/sql.md",
+      "line_count": 88,
+      "last_updated": "2026-01-19T21:22:12Z"
+    },
+    "codebase_index/parsers/typescript.py": {
+      "doc_path": "docs/parsers/typescript.md",
+      "line_count": 118,
+      "last_updated": "2026-01-19T21:22:12Z"
+    },
+    "codebase_index/analyzers/auth.py": {
+      "doc_path": "docs/analyzers/auth.md",
+      "line_count": 65,
+      "last_updated": "2026-01-19T21:23:19Z"
+    },
+    "codebase_index/analyzers/centrality.py": {
+      "doc_path": "docs/analyzers/centrality.md",
+      "line_count": 66,
+      "last_updated": "2026-01-19T21:23:19Z"
+    },
+    "codebase_index/analyzers/complexity.py": {
+      "doc_path": "docs/analyzers/complexity.md",
+      "line_count": 86,
+      "last_updated": "2026-01-19T21:23:19Z"
+    },
+    "codebase_index/analyzers/coverage.py": {
+      "doc_path": "docs/analyzers/coverage.md",
+      "line_count": 65,
+      "last_updated": "2026-01-19T21:23:19Z"
+    },
+    "codebase_index/analyzers/doc_generator.py": {
+      "doc_path": "docs/analyzers/doc_generator.md",
+      "line_count": 88,
+      "last_updated": "2026-01-19T21:23:19Z"
+    },
+    "codebase_index/analyzers/execution_flow.py": {
+      "doc_path": "docs/analyzers/execution_flow.md",
+      "line_count": 87,
+      "last_updated": "2026-01-19T21:23:20Z"
+    },
+    "codebase_index/analyzers/impact.py": {
+      "doc_path": "docs/analyzers/impact.md",
+      "line_count": 73,
+      "last_updated": "2026-01-19T21:23:20Z"
+    },
+    "codebase_index/analyzers/imports.py": {
+      "doc_path": "docs/analyzers/imports.md",
+      "line_count": 76,
+      "last_updated": "2026-01-19T21:23:20Z"
+    },
+    "codebase_index/analyzers/orphans.py": {
+      "doc_path": "docs/analyzers/orphans.md",
+      "line_count": 72,
+      "last_updated": "2026-01-19T21:23:20Z"
+    },
+    "codebase_index/analyzers/semantic.py": {
+      "doc_path": "docs/analyzers/semantic.md",
+      "line_count": 83,
+      "last_updated": "2026-01-19T21:23:20Z"
+    },
+    "codebase_index/analyzers/staleness.py": {
+      "doc_path": "docs/analyzers/staleness.md",
+      "line_count": 75,
+      "last_updated": "2026-01-19T21:23:20Z"
+    },
+    "codebase_index/analyzers/test_mapper.py": {
+      "doc_path": "docs/analyzers/test_mapper.md",
+      "line_count": 86,
+      "last_updated": "2026-01-19T21:23:20Z"
+    },
+    "codebase_index/scanners/alembic.py": {
+      "doc_path": "docs/scanners/alembic.md",
+      "line_count": 75,
+      "last_updated": "2026-01-19T21:21:26Z"
+    },
+    "codebase_index/scanners/dependencies.py": {
+      "doc_path": "docs/scanners/dependencies.md",
+      "line_count": 70,
+      "last_updated": "2026-01-19T21:21:43Z"
+    },
+    "codebase_index/scanners/env.py": {
+      "doc_path": "docs/scanners/env.md",
+      "line_count": 78,
+      "last_updated": "2026-01-19T21:22:01Z"
+    },
+    "codebase_index/scanners/http_calls.py": {
+      "doc_path": "docs/scanners/http_calls.md",
+      "line_count": 86,
+      "last_updated": "2026-01-19T21:22:18Z"
+    },
+    "codebase_index/scanners/middleware.py": {
+      "doc_path": "docs/scanners/middleware.md",
+      "line_count": 98,
+      "last_updated": "2026-01-19T21:22:34Z"
+    },
+    "codebase_index/scanners/routes.py": {
+      "doc_path": "docs/scanners/routes.md",
+      "line_count": 76,
+      "last_updated": "2026-01-19T21:22:50Z"
+    },
+    "codebase_index/scanners/todo.py": {
+      "doc_path": "docs/scanners/todo.md",
+      "line_count": 99,
+      "last_updated": "2026-01-19T21:23:07Z"
+    },
+    "codebase_index/scanners/websocket.py": {
+      "doc_path": "docs/scanners/websocket.md",
+      "line_count": 92,
+      "last_updated": "2026-01-19T21:23:24Z"
+    },
+    "codebase_index/call_graph.py": {
+      "doc_path": "docs/core/call_graph.md",
+      "line_count": 69,
+      "last_updated": "2026-01-19T21:22:19Z"
+    },
+    "codebase_index/cli.py": {
+      "doc_path": "docs/core/cli.md",
+      "line_count": 96,
+      "last_updated": "2026-01-19T21:22:20Z"
+    },
+    "codebase_index/config.py": {
+      "doc_path": "docs/core/config.md",
+      "line_count": 77,
+      "last_updated": "2026-01-19T21:22:20Z"
+    },
+    "codebase_index/incremental.py": {
+      "doc_path": "docs/core/incremental.md",
+      "line_count": 83,
+      "last_updated": "2026-01-19T21:22:20Z"
+    },
+    "codebase_index/scanner.py": {
+      "doc_path": "docs/core/scanner.md",
+      "line_count": 96,
+      "last_updated": "2026-01-19T21:22:20Z"
+    },
+    "codebase_index/utils.py": {
+      "doc_path": "docs/core/utils.md",
+      "line_count": 128,
+      "last_updated": "2026-01-19T21:22:20Z"
+    }
+  },
+  "indexes": {
+    "docs/README.md": {
+      "source_dir": "codebase_index",
+      "last_updated": "2026-01-19T21:24:26Z"
+    },
+    "docs/core/README.md": {
+      "source_dir": "codebase_index",
+      "last_updated": "2026-01-19T21:22:20Z"
+    },
+    "docs/parsers/README.md": {
+      "source_dir": "codebase_index/parsers",
+      "last_updated": "2026-01-19T21:22:12Z"
+    },
+    "docs/analyzers/README.md": {
+      "source_dir": "codebase_index/analyzers",
+      "last_updated": "2026-01-19T21:23:39Z"
+    },
+    "docs/scanners/README.md": {
+      "source_dir": "codebase_index/scanners",
+      "last_updated": "2026-01-19T21:23:44Z"
+    }
+  }
+}

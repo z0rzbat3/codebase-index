@@ -58,31 +58,59 @@ else
 
     cat > .doc-config.json << 'EOF'
 {
-  "version": "1.0",
-  "description": "Documentation mapping configuration - EDIT FOR YOUR PROJECT",
+  "version": "2.0",
+  "strategy": "mirror",
+  "description": "Documentation mapping configuration for /generate-docs skill",
+
+  "source_root": "src",
+  "docs_root": "docs",
+  "index_files": true,
+
   "mappings": [
     {
-      "source": "src/",
-      "doc": "docs/API.md",
-      "type": "module",
-      "description": "Main source documentation",
-      "extensions": [".py", ".ts", ".js"]
+      "source": "src/api/routers",
+      "docs": "docs/api/routers",
+      "template": "api-endpoint",
+      "extensions": [".py"]
+    },
+    {
+      "source": "src/db/models",
+      "docs": "docs/db/models",
+      "template": "db-model",
+      "extensions": [".py"]
+    },
+    {
+      "source": "src/services",
+      "docs": "docs/services",
+      "template": "module",
+      "extensions": [".py"]
     }
   ],
+
   "exclude": [
     "**/__pycache__/**",
-    "**/*.pyc",
+    "**/__init__.py",
+    "**/__main__.py",
+    "**/test_*.py",
+    "**/*_test.py",
     "**/node_modules/**",
-    "**/.git/**",
     "**/dist/**",
     "**/.venv/**"
   ],
-  "options": {
-    "create_pr": true,
-    "auto_commit": false
+
+  "validation": {
+    "check_references": true,
+    "check_symbols": true,
+    "forbidden_terms": [],
+    "required_sections": ["Overview"]
   }
 }
 EOF
+    echo ""
+    echo "  ⚠️  Default config created with placeholder mappings."
+    echo "  📝 Edit .doc-config.json to match YOUR project structure:"
+    echo "     - Update source_root to your source directory"
+    echo "     - Add mappings for each source → docs directory pair"
 
     echo "  ✅ Created .doc-config.json"
     echo "  📝 Edit this file to customize source-to-doc mappings"
@@ -101,10 +129,11 @@ else
 
     cat > .doc-manifest.json << 'EOF'
 {
-  "version": "1.0",
-  "last_full_generation": null,
-  "index_hash": null,
-  "source_to_doc": {}
+  "version": "2.0",
+  "strategy": "mirror",
+  "last_updated": null,
+  "files": {},
+  "indexes": {}
 }
 EOF
 
@@ -139,29 +168,35 @@ if [ -f ".git/hooks/pre-commit" ]; then
 
 check_doc_staleness() {
     if [ ! -f ".doc-manifest.json" ]; then return 0; fi
+    if [ ! -f ".doc-config.json" ]; then return 0; fi
     if ! command -v jq &> /dev/null; then return 0; fi
 
     local STALE_COUNT=0
     local STALE_DOCS=""
-    local STAGED_SRC=$(git diff --cached --name-only --diff-filter=ACM | grep -E '^src/' || true)
 
+    # Get source_root from config (default to "src" if not set)
+    local SOURCE_ROOT=$(jq -r '.source_root // "src"' .doc-config.json)
+
+    # Get staged source files matching the source_root
+    local STAGED_SRC=$(git diff --cached --name-only --diff-filter=ACM | grep -E "^${SOURCE_ROOT}/" || true)
     if [ -z "$STAGED_SRC" ]; then return 0; fi
 
-    local MAPPINGS=$(jq -r '.source_to_doc | keys[]' .doc-manifest.json 2>/dev/null || true)
+    # Get tracked source files from manifest
+    local TRACKED_FILES=$(jq -r '.files | keys[]' .doc-manifest.json 2>/dev/null || true)
 
-    for source_dir in $MAPPINGS; do
-        if echo "$STAGED_SRC" | grep -q "^${source_dir}"; then
-            local DOC_PATH=$(jq -r --arg src "$source_dir" '.source_to_doc[$src].doc_path' .doc-manifest.json)
+    for src_file in $TRACKED_FILES; do
+        if echo "$STAGED_SRC" | grep -q "^${src_file}$"; then
+            local DOC_PATH=$(jq -r --arg src "$src_file" '.files[$src].doc_path' .doc-manifest.json)
             if [ -n "$DOC_PATH" ] && [ "$DOC_PATH" != "null" ]; then
                 STALE_COUNT=$((STALE_COUNT + 1))
-                STALE_DOCS="$STALE_DOCS\n  - $source_dir -> $DOC_PATH"
+                STALE_DOCS="$STALE_DOCS\n  - $src_file -> $DOC_PATH"
             fi
         fi
     done
 
     if [ $STALE_COUNT -gt 0 ]; then
         echo ""
-        echo "⚠️  DOCUMENTATION MAY BE STALE ($STALE_COUNT mappings affected)"
+        echo "⚠️  DOCUMENTATION MAY BE STALE ($STALE_COUNT files affected)"
         echo -e "$STALE_DOCS"
         echo "Run: /generate-docs --incremental"
         echo ""
@@ -200,32 +235,38 @@ else
     fi
 fi
 
-# Doc staleness check
+# Doc staleness check (v2.0 mirror strategy)
 check_doc_staleness() {
     if [ ! -f ".doc-manifest.json" ]; then return 0; fi
+    if [ ! -f ".doc-config.json" ]; then return 0; fi
     if ! command -v jq &> /dev/null; then return 0; fi
 
     local STALE_COUNT=0
     local STALE_DOCS=""
-    local STAGED_SRC=$(git diff --cached --name-only --diff-filter=ACM | grep -E '^src/' || true)
 
+    # Get source_root from config (default to "src" if not set)
+    local SOURCE_ROOT=$(jq -r '.source_root // "src"' .doc-config.json)
+
+    # Get staged source files matching the source_root
+    local STAGED_SRC=$(git diff --cached --name-only --diff-filter=ACM | grep -E "^${SOURCE_ROOT}/" || true)
     if [ -z "$STAGED_SRC" ]; then return 0; fi
 
-    local MAPPINGS=$(jq -r '.source_to_doc | keys[]' .doc-manifest.json 2>/dev/null || true)
+    # Get tracked source files from manifest
+    local TRACKED_FILES=$(jq -r '.files | keys[]' .doc-manifest.json 2>/dev/null || true)
 
-    for source_dir in $MAPPINGS; do
-        if echo "$STAGED_SRC" | grep -q "^${source_dir}"; then
-            local DOC_PATH=$(jq -r --arg src "$source_dir" '.source_to_doc[$src].doc_path' .doc-manifest.json)
+    for src_file in $TRACKED_FILES; do
+        if echo "$STAGED_SRC" | grep -q "^${src_file}$"; then
+            local DOC_PATH=$(jq -r --arg src "$src_file" '.files[$src].doc_path' .doc-manifest.json)
             if [ -n "$DOC_PATH" ] && [ "$DOC_PATH" != "null" ]; then
                 STALE_COUNT=$((STALE_COUNT + 1))
-                STALE_DOCS="$STALE_DOCS\n  - $source_dir -> $DOC_PATH"
+                STALE_DOCS="$STALE_DOCS\n  - $src_file -> $DOC_PATH"
             fi
         fi
     done
 
     if [ $STALE_COUNT -gt 0 ]; then
         echo ""
-        echo "⚠️  DOCUMENTATION MAY BE STALE ($STALE_COUNT mappings affected)"
+        echo "⚠️  DOCUMENTATION MAY BE STALE ($STALE_COUNT files affected)"
         echo -e "$STALE_DOCS"
         echo "Run: /generate-docs --incremental"
         echo ""
