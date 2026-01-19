@@ -585,15 +585,20 @@ python -m codebase_index --load index.json --search "database connection pool"
 
 # Adjust threshold for more/fewer results (default: 0.3)
 python -m codebase_index --load index.json --search "auth" --search-threshold 0.2
+```
 
-# Output:
-# {
-#   "query": "retry logic with backoff",
-#   "results": [
-#     {"symbol": "retry_with_exponential_backoff", "file": "src/utils/http.py", "score": 0.89}
-#   ],
-#   "model": "microsoft/unixcoder-base"
-# }
+### 10. CI/CD: Incremental Updates with Embeddings
+```bash
+# Initial setup (run once locally or in CI)
+python -m codebase_index . --build-embeddings -o index.json
+
+# On every push/merge: update index AND embeddings incrementally
+# Only re-scans changed files, only regenerates embeddings for changed symbols
+python -m codebase_index --load index.json --update --build-embeddings -o index.json
+
+# Output shows what was updated:
+# Incremental update: Added: 2, Updated: 1, Unchanged: 50 files
+# Incremental embedding update: keeping 300 unchanged, rebuilding for 3 changed files
 ```
 
 ## Output Size Considerations
@@ -614,7 +619,7 @@ python -m codebase_index --load index.json --search "auth" --search-threshold 0.
 
 | Version | Features |
 |---------|----------|
-| 3.0 | **Slim edition**: Focused 10-command interface, removed doc generation and LLM summaries |
+| 3.0 | **Slim edition**: Focused 10-command CLI, incremental embedding updates, removed doc generation |
 | 2.2 | Semantic search: `--search`, `--build-embeddings`, incremental `--update` |
 | 2.1 | Analysis queries: `--check` staleness, `--tests`, `--impact` |
 | 2.0 | Modular architecture, plugin system for parsers |

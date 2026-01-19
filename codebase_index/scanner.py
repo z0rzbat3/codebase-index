@@ -48,8 +48,8 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# Tool version
-VERSION = "2.2.0"
+# Tool version - import from package
+from codebase_index import __version__ as VERSION
 
 
 class CodebaseScanner:
