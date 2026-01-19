@@ -6,7 +6,7 @@ SQL (regex), Docker (YAML), and custom languages.
 """
 
 __version__ = "3.0.0"
-__author__ = "Isaac"
+__author__ = "Isaak Karipidis"
 
 from codebase_index.scanner import CodebaseScanner
 from codebase_index.config import DEFAULT_CONFIG, DEFAULT_EXCLUDE
