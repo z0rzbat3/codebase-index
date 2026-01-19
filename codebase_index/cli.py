@@ -33,6 +33,249 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+# Index schema template - describes the structure of index.json
+INDEX_SCHEMA = {
+    "meta": {
+        "_description": "Metadata about the scan",
+        "scanned_at": "ISO timestamp of scan",
+        "root": "Root directory scanned",
+        "git_branch": "Current git branch (if git repo)",
+        "git_commit": "Current git commit hash",
+        "version": "codebase-index version",
+    },
+    "summary": {
+        "_description": "Aggregate statistics",
+        "total_files": "int - Number of files scanned",
+        "total_lines": "int - Total lines of code",
+        "total_functions": "int - Function count",
+        "total_classes": "int - Class count",
+        "total_methods": "int - Method count",
+        "by_language": "dict - Files/lines per language",
+        "by_category": "dict - Files grouped by type (routes, models, etc.)",
+    },
+    "symbol_index": {
+        "_description": "All code symbols indexed",
+        "functions": "[{name, file, line, signature, docstring, async}]",
+        "classes": "[{name, file, line, bases, docstring, method_count}]",
+        "methods": "[{name, class, file, line, signature, docstring, async}]",
+    },
+    "call_graph": {
+        "_description": "Function call relationships",
+        "_format": "{symbol_key: {file, line, calls: [called_symbols]}}",
+        "_example": "file.py:func_name → {file: 'file.py', line: 10, calls: ['other_func']}",
+    },
+    "files": {
+        "_description": "List of all scanned files",
+        "_format": "[{path, size, language, hash, exports}]",
+    },
+    "centrality": {
+        "_description": "Symbol importance analysis",
+        "core_components": "High in-degree (many callers) - critical code",
+        "hub_components": "High out-degree (calls many) - orchestrators",
+        "utility_components": "Balanced - helper functions",
+        "isolated_components": "Low connectivity - possibly dead code",
+        "classifications": "{symbol: classification}",
+    },
+    "semantic": {
+        "_description": "Embeddings for semantic search",
+        "embeddings": "[[float]] - Vector embeddings",
+        "symbols": "[str] - Symbol names matching embeddings",
+        "model": "Model used for embeddings",
+        "count": "Number of embedded symbols",
+    },
+    "dependencies": {
+        "_description": "Project dependencies",
+        "python": "[packages from requirements.txt/pyproject.toml]",
+        "node": "[packages from package.json]",
+    },
+    "api_endpoints": {
+        "_description": "HTTP routes/endpoints",
+        "_format": "[{method, path, file, line, handler, auth_required}]",
+    },
+    "database": {
+        "_description": "Database tables and schemas",
+        "tables": "[{name, file, line, columns}]",
+    },
+    "test_coverage": {
+        "_description": "Test file mapping",
+        "test_files": "[paths to test files]",
+        "source_to_test": "{source_file: [test_files]}",
+    },
+}
+
+
+def get_index_schema() -> dict:
+    """Return the index schema template."""
+    return INDEX_SCHEMA
+
+
+def get_keys_at_path(data: dict, path: str, limit: int | None = None) -> dict:
+    """List keys at a given JSON path.
+
+    Args:
+        data: The index data
+        path: Dot-notation path (empty string for root)
+        limit: Optional limit on results
+
+    Returns:
+        Dict with keys and their types/counts
+    """
+    # Navigate to path
+    current = data
+    if path:
+        for part in path.split("."):
+            if isinstance(current, dict) and part in current:
+                current = current[part]
+            elif isinstance(current, list) and part.isdigit():
+                idx = int(part)
+                if 0 <= idx < len(current):
+                    current = current[idx]
+                else:
+                    return {"error": f"Index {idx} out of range", "path": path}
+            else:
+                return {"error": f"Path '{part}' not found", "path": path}
+
+    # Describe what's at this path
+    if isinstance(current, dict):
+        keys_info = []
+        for k, v in current.items():
+            if isinstance(v, dict):
+                keys_info.append({"key": k, "type": "object", "count": len(v)})
+            elif isinstance(v, list):
+                keys_info.append({"key": k, "type": "array", "count": len(v)})
+            else:
+                keys_info.append({"key": k, "type": type(v).__name__, "value": _truncate(v)})
+
+        if limit:
+            keys_info = keys_info[:limit]
+
+        return {"path": path or "(root)", "keys": keys_info}
+
+    elif isinstance(current, list):
+        # Show array info
+        sample = current[:limit] if limit else current[:5]
+        return {
+            "path": path,
+            "type": "array",
+            "count": len(current),
+            "sample": sample,
+            "note": f"Use --path '{path}.0' to access first item" if current else None,
+        }
+    else:
+        return {"path": path, "type": type(current).__name__, "value": current}
+
+
+def _truncate(value, max_len: int = 50) -> str:
+    """Truncate a value for display."""
+    s = str(value)
+    if len(s) > max_len:
+        return s[:max_len] + "..."
+    return s
+
+
+def find_symbol_by_name(data: dict, name: str) -> dict:
+    """Find a symbol by name across functions, classes, and methods.
+
+    Args:
+        data: The index data
+        name: Symbol name to find (can be partial)
+
+    Returns:
+        Dict with matching symbols and their details
+    """
+    results = []
+    symbol_index = data.get("symbol_index", {})
+    call_graph = data.get("call_graph", {})
+
+    name_lower = name.lower()
+
+    # Search functions
+    for func in symbol_index.get("functions", []):
+        if name_lower in func.get("name", "").lower():
+            func_copy = dict(func)
+            func_copy["_type"] = "function"
+            # Add call graph info
+            key = f"{func['file']}:{func['name']}"
+            if key in call_graph:
+                func_copy["calls"] = call_graph[key].get("calls", [])
+            results.append(func_copy)
+
+    # Search classes
+    for cls in symbol_index.get("classes", []):
+        if name_lower in cls.get("name", "").lower():
+            cls_copy = dict(cls)
+            cls_copy["_type"] = "class"
+            # Find methods for this class
+            methods = [m for m in symbol_index.get("methods", [])
+                      if m.get("class") == cls["name"]]
+            cls_copy["methods"] = [m["name"] for m in methods]
+            results.append(cls_copy)
+
+    # Search methods
+    for method in symbol_index.get("methods", []):
+        full_name = f"{method.get('class', '')}.{method.get('name', '')}"
+        if name_lower in full_name.lower() or name_lower in method.get("name", "").lower():
+            method_copy = dict(method)
+            method_copy["_type"] = "method"
+            # Add call graph info
+            key = f"{method['file']}:{method.get('class', '')}.{method['name']}"
+            if key in call_graph:
+                method_copy["calls"] = call_graph[key].get("calls", [])
+            results.append(method_copy)
+
+    if not results:
+        return {"query": name, "count": 0, "results": [], "hint": "Try a partial name or check --keys symbol_index"}
+
+    return {"query": name, "count": len(results), "results": results}
+
+
+def get_data_at_path(data: dict, path: str, limit: int | None = None) -> dict:
+    """Extract data at a dot-notation path.
+
+    Args:
+        data: The index data
+        path: Dot-notation path (e.g., 'symbol_index.functions')
+        limit: Optional limit for array results
+
+    Returns:
+        The data at the path, or error info
+    """
+    current = data
+    parts = path.split(".")
+
+    for i, part in enumerate(parts):
+        if isinstance(current, dict) and part in current:
+            current = current[part]
+        elif isinstance(current, list) and part.isdigit():
+            idx = int(part)
+            if 0 <= idx < len(current):
+                current = current[idx]
+            else:
+                return {
+                    "error": f"Index {idx} out of range (array has {len(current)} items)",
+                    "path": ".".join(parts[:i+1]),
+                }
+        else:
+            # Try to find similar keys for helpful error
+            available = list(current.keys()) if isinstance(current, dict) else []
+            return {
+                "error": f"Key '{part}' not found",
+                "path": ".".join(parts[:i+1]),
+                "available_keys": available[:10] if available else None,
+            }
+
+    # Apply limit to arrays
+    if isinstance(current, list) and limit:
+        return {
+            "path": path,
+            "total": len(current),
+            "limited_to": limit,
+            "data": current[:limit],
+        }
+
+    return {"path": path, "data": current}
+
+
 def create_parser() -> argparse.ArgumentParser:
     """Create the argument parser."""
     parser = argparse.ArgumentParser(
@@ -62,6 +305,22 @@ ANALYSIS QUERIES
   --impact FILE      Blast radius: callers, tests, endpoints affected
   --tests SYMBOL     Find tests for a function/class
   --doc SYMBOL       Full documentation for a symbol
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+INDEX NAVIGATION (for LLMs traversing large indexes)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  --schema             Show index structure template (what fields exist)
+  --keys [PATH]        List keys at path (empty=root). Example: --keys symbol_index
+  --get SYMBOL         Get full details for a symbol by name
+  --path PATH          Extract data at dot-notation path. Example: --path summary.total_files
+  --limit N            Limit array results (use with --path or --keys)
+
+Examples:
+  codebase-index --load index.json --schema                    # See structure
+  codebase-index --load index.json --keys                      # List top-level keys
+  codebase-index --load index.json --keys symbol_index         # List keys under symbol_index
+  codebase-index --load index.json --get CodebaseScanner       # Full info for a symbol
+  codebase-index --load index.json --path "symbol_index.functions" --limit 5
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 SEMANTIC SEARCH
@@ -195,6 +454,42 @@ findings against actual source code.
         default=0.3,
         help="Minimum similarity score for semantic search (0.0-1.0, default: 0.3). Lower = more results.",
     )
+
+    # Index navigation options (for LLMs)
+    nav_group = parser.add_argument_group(
+        "Index Navigation",
+        "Query the index structure directly (useful for LLMs exploring large indexes)"
+    )
+    nav_group.add_argument(
+        "--schema",
+        action="store_true",
+        help="Show index structure template with field descriptions",
+    )
+    nav_group.add_argument(
+        "--keys",
+        nargs="?",
+        const="",
+        metavar="PATH",
+        help="List keys at JSON path (omit PATH for root keys). E.g., --keys symbol_index",
+    )
+    nav_group.add_argument(
+        "--get",
+        metavar="SYMBOL",
+        help="Get full details for a symbol by name (searches functions, classes, methods)",
+    )
+    nav_group.add_argument(
+        "--path",
+        dest="json_path",
+        metavar="JSONPATH",
+        help="Extract data at dot-notation path. E.g., --path summary.total_files",
+    )
+    nav_group.add_argument(
+        "--limit",
+        type=int,
+        metavar="N",
+        help="Limit array results when using --path or --keys (default: no limit)",
+    )
+
     parser.add_argument(
         "-v", "--verbose",
         action="store_true",
@@ -347,6 +642,30 @@ def main() -> None:
         checker = StalenessChecker(root, result, index_file=index_file)
         staleness = checker.check()
         print(json.dumps(staleness, indent=2, default=str))
+        return
+
+    # Handle --schema: show index structure template
+    if args.schema:
+        schema = get_index_schema()
+        print(json.dumps(schema, indent=2))
+        return
+
+    # Handle --keys: list keys at a path
+    if args.keys is not None:
+        keys_result = get_keys_at_path(result, args.keys, limit=args.limit)
+        print(json.dumps(keys_result, indent=2, default=str))
+        return
+
+    # Handle --get: find symbol by name
+    if args.get:
+        symbol_result = find_symbol_by_name(result, args.get)
+        print(json.dumps(symbol_result, indent=2, default=str))
+        return
+
+    # Handle --path: extract data at path
+    if args.json_path:
+        path_result = get_data_at_path(result, args.json_path, limit=args.limit)
+        print(json.dumps(path_result, indent=2, default=str))
         return
 
     # Handle --tests: find tests for a symbol

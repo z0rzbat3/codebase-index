@@ -1,6 +1,6 @@
 ---
 name: codebase-analysis
-description: Explore codebase, analyze code, review code, assess code quality, evaluate architecture, find callers, measure impact, search semantically, generate documentation. Triggers on: dependencies, what calls, who calls, what uses, callers, impact, blast radius, code architecture, find function, search code, explore codebase, analyse code, review code, review documentation, document, create documentation, evaluate, assess.
+description: Explore codebase, analyze code, review code, assess code quality, evaluate architecture, find callers, measure impact, search semantically, generate documentation, navigate index. Triggers on: dependencies, what calls, who calls, what uses, callers, impact, blast radius, code architecture, find function, search code, explore codebase, analyse code, review code, review documentation, document, create documentation, evaluate, assess, index structure, list symbols, list functions, list classes, how many files, how many lines, codebase stats, inventory.
 allowed-tools: Bash(codebase-index:*), Bash(pip:*), Bash(cp:*), Bash(chmod:*), Bash(mkdir:*), Read, Glob, Write
 user-invocable: true
 ---
@@ -51,6 +51,10 @@ chmod +x .git/hooks/pre-commit
 | "How does X work?" / "Show me X" | `--doc X` |
 | "Find code that does Y" | `--search "Y"` |
 | "What's in this codebase?" | `--summary` |
+| "What's the index structure?" | `--schema` |
+| "List all functions/classes" | `--keys symbol_index` |
+| "Find symbol named X" | `--get X` |
+| "How many files/lines?" | `--path summary.total_files` |
 
 ## Commands (use after setup)
 
@@ -77,6 +81,45 @@ codebase-index --load index.json --search "retry logic with backoff"
 ### Codebase overview
 ```bash
 codebase-index --load index.json --summary
+```
+
+## Index Navigation (for large codebases)
+
+Use these commands to explore the index structure directly without loading it all into context.
+
+### See index structure/schema
+```bash
+codebase-index --load index.json --schema
+```
+
+### List keys at any level
+```bash
+# Root level keys
+codebase-index --load index.json --keys
+
+# Keys under a specific section
+codebase-index --load index.json --keys symbol_index
+codebase-index --load index.json --keys centrality
+```
+
+### Find a symbol by name
+```bash
+# Searches functions, classes, and methods
+codebase-index --load index.json --get MyClassName
+codebase-index --load index.json --get parse  # partial match
+```
+
+### Extract data at specific path
+```bash
+# Get a single value
+codebase-index --load index.json --path summary.total_files
+
+# Get array with limit
+codebase-index --load index.json --path symbol_index.functions --limit 10
+codebase-index --load index.json --path centrality.hub_components --limit 5
+
+# Navigate nested structures
+codebase-index --load index.json --path call_graph
 ```
 
 ## Index Freshness
