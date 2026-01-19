@@ -1,0 +1,55 @@
+{
+  "version": "1.0",
+  "description": "Documentation mapping configuration - customize for your project",
+  "mappings": [
+    {
+      "source": "src/api/",
+      "doc": "docs/api/API_REFERENCE.md",
+      "type": "api",
+      "description": "REST API endpoint documentation",
+      "extensions": [".py", ".ts"]
+    },
+    {
+      "source": "src/db/",
+      "doc": "docs/architecture/DATABASE.md",
+      "type": "database",
+      "description": "Database schema and relationships",
+      "extensions": [".py", ".sql"]
+    },
+    {
+      "source": "src/auth/",
+      "doc": "docs/architecture/AUTHENTICATION.md",
+      "type": "module",
+      "description": "Authentication system",
+      "extensions": [".py", ".ts"]
+    },
+    {
+      "source": "src/frontend/",
+      "doc": "docs/architecture/FRONTEND.md",
+      "type": "frontend",
+      "description": "Frontend pages and components",
+      "extensions": [".tsx", ".ts", ".jsx", ".js"]
+    },
+    {
+      "source": "src/core/",
+      "doc": "docs/architecture/CORE.md",
+      "type": "module",
+      "description": "Core business logic",
+      "extensions": [".py", ".ts"]
+    }
+  ],
+  "exclude": [
+    "**/__pycache__/**",
+    "**/*.pyc",
+    "**/node_modules/**",
+    "**/.git/**",
+    "**/dist/**",
+    "**/.venv/**",
+    "**/venv/**"
+  ],
+  "options": {
+    "create_pr": true,
+    "auto_commit": false,
+    "ci_verify_only": false
+  }
+}

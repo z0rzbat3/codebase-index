@@ -601,6 +601,98 @@ python -m codebase_index --load index.json --update --build-embeddings -o index.
 # Incremental embedding update: keeping 300 unchanged, rebuilding for 3 changed files
 ```
 
+---
+
+## Automated Documentation Maintenance
+
+Keep documentation in sync with code using the included `/generate-docs` skill and CI/CD workflow.
+
+### How It Works
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                         LOCAL (pre-commit)                          │
+│  1. Update index.json (automatic)                                   │
+│  2. Warn if docs are stale (non-blocking)                           │
+└─────────────────────────────────────────────────────────────────────┘
+                              │
+                              ▼ (push/merge)
+┌─────────────────────────────────────────────────────────────────────┐
+│                     CI/CD (GitHub Action)                           │
+│  1. Check staleness (compare hashes to manifest)                    │
+│  2. If stale → Run Claude /generate-docs --incremental              │
+│  3. Create PR with updated docs                                     │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+### Quick Setup
+
+```bash
+# Run the setup script in your repo
+./scripts/setup-doc-maintenance.sh
+
+# Or manually:
+# 1. Copy .doc-config.json template
+# 2. Copy .github/workflows/docs-maintenance.yml
+# 3. Edit .doc-config.json for your project
+# 4. Run /generate-docs to initialize
+```
+
+### The `/generate-docs` Skill
+
+Available modes:
+
+| Mode | Command | Description |
+|------|---------|-------------|
+| **Full** | `/generate-docs` | Regenerate all documentation |
+| **Incremental** | `/generate-docs --incremental` | Only update stale docs |
+| **Verify** | `/generate-docs --verify` | Check what's stale (no changes) |
+| **Diff** | `/generate-docs --diff` | Preview what would change |
+
+### Configuration Files
+
+**`.doc-config.json`** - Maps source directories to documentation files:
+```json
+{
+  "mappings": [
+    {"source": "src/api/", "doc": "docs/api/API.md"},
+    {"source": "src/db/", "doc": "docs/DATABASE.md"}
+  ]
+}
+```
+
+**`.doc-manifest.json`** - Tracks documentation state (hashes, timestamps).
+
+### Included Files
+
+```
+.claude/skills/generate-docs/       # Claude Code skill
+├── SKILL.md                        # Full skill documentation
+└── templates/
+    ├── doc-config.json             # Config template
+    ├── doc-manifest.json           # Manifest template
+    └── docs-maintenance.yml        # GitHub Action template
+
+.github/workflows/
+└── docs-maintenance.yml            # CI/CD workflow
+
+scripts/
+├── setup-doc-maintenance.sh        # One-command setup
+└── hooks/pre-commit-docs           # Pre-commit staleness checker
+```
+
+### GitHub Action
+
+The workflow:
+1. Triggers on merge to `main` or `develop`
+2. Checks if docs are stale (source hash changed)
+3. Runs Claude with `/generate-docs --incremental`
+4. Creates a PR with updated documentation
+
+**Required secret:** `ANTHROPIC_API_KEY`
+
+---
+
 ## Output Size Considerations
 
 | Codebase Size | Full Output | Summary Only |

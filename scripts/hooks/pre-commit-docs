@@ -1,0 +1,114 @@
+#!/bin/bash
+# ============================================================================
+# Documentation Staleness Checker - Pre-commit Hook Component
+# ============================================================================
+#
+# This script can be sourced from your pre-commit hook or run standalone.
+# It checks if staged source files will make documentation stale.
+#
+# Usage:
+#   1. Source from existing pre-commit: source scripts/hooks/pre-commit-docs
+#   2. Or add to your pre-commit hook manually
+#
+# Requirements:
+#   - jq (for JSON parsing)
+#   - .doc-manifest.json (created by /generate-docs)
+#
+# ============================================================================
+
+check_doc_staleness() {
+    # Skip if no manifest exists (not initialized yet)
+    if [ ! -f ".doc-manifest.json" ]; then
+        return 0
+    fi
+
+    # Skip if jq is not installed
+    if ! command -v jq &> /dev/null; then
+        echo "Warning: jq not installed, skipping doc staleness check"
+        return 0
+    fi
+
+    local STALE_COUNT=0
+    local STALE_DOCS=""
+
+    # Get staged source files
+    local STAGED_SRC=$(git diff --cached --name-only --diff-filter=ACM | grep -E '^src/' || true)
+
+    if [ -z "$STAGED_SRC" ]; then
+        return 0
+    fi
+
+    # Check each mapping in the manifest
+    local MAPPINGS=$(jq -r '.source_to_doc | keys[]' .doc-manifest.json 2>/dev/null || true)
+
+    for source_dir in $MAPPINGS; do
+        # Check if any staged files are in this source directory
+        if echo "$STAGED_SRC" | grep -q "^${source_dir}"; then
+            # Get the doc path for this source
+            local DOC_PATH=$(jq -r --arg src "$source_dir" '.source_to_doc[$src].doc_path' .doc-manifest.json)
+
+            if [ -n "$DOC_PATH" ] && [ "$DOC_PATH" != "null" ]; then
+                STALE_COUNT=$((STALE_COUNT + 1))
+                STALE_DOCS="$STALE_DOCS\n  - $source_dir -> $DOC_PATH"
+            fi
+        fi
+    done
+
+    if [ $STALE_COUNT -gt 0 ]; then
+        echo ""
+        echo "╔════════════════════════════════════════════════════════════════╗"
+        echo "║  ⚠️  DOCUMENTATION MAY BE STALE                                 ║"
+        echo "╠════════════════════════════════════════════════════════════════╣"
+        echo "║  You modified source files that have associated documentation. ║"
+        echo "║  Consider updating docs after this commit.                     ║"
+        echo "╠════════════════════════════════════════════════════════════════╣"
+        echo "║  Affected mappings ($STALE_COUNT):                                       ║"
+        echo -e "$STALE_DOCS"
+        echo "╠════════════════════════════════════════════════════════════════╣"
+        echo "║  Run: /generate-docs --incremental                             ║"
+        echo "║  Or wait for CI to auto-update on merge                        ║"
+        echo "╚════════════════════════════════════════════════════════════════╝"
+        echo ""
+    fi
+
+    return 0
+}
+
+write_staleness_flag() {
+    # Skip if no manifest
+    if [ ! -f ".doc-manifest.json" ]; then
+        return 0
+    fi
+
+    # Skip if jq not available
+    if ! command -v jq &> /dev/null; then
+        return 0
+    fi
+
+    local STAGED_SRC=$(git diff --cached --name-only --diff-filter=ACM | grep -E '^src/' || true)
+
+    if [ -z "$STAGED_SRC" ]; then
+        # No source changes, clear flag
+        rm -f .doc-stale-flag 2>/dev/null || true
+        return 0
+    fi
+
+    # Write flag with timestamp and affected files
+    cat > .doc-stale-flag << EOF
+{
+  "timestamp": "$(date -Iseconds)",
+  "commit": "$(git rev-parse --short HEAD 2>/dev/null || echo 'pre-commit')",
+  "staged_source_files": $(echo "$STAGED_SRC" | jq -R -s -c 'split("\n") | map(select(length > 0))')
+}
+EOF
+
+    # Stage the flag file
+    git add .doc-stale-flag 2>/dev/null || true
+    return 0
+}
+
+# If run directly (not sourced), execute the checks
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+    check_doc_staleness
+    write_staleness_flag
+fi

@@ -1,0 +1,260 @@
+name: Documentation Maintenance
+
+on:
+  # Run on merges to main or develop
+  push:
+    branches:
+      - main
+      - develop
+    paths:
+      # Only run when source code changes, not docs
+      - 'src/**'
+      - '!src/**/*.md'
+
+  # Allow manual trigger
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: 'Documentation mode'
+        required: true
+        default: 'incremental'
+        type: choice
+        options:
+          - verify
+          - incremental
+          - full
+      create_pr:
+        description: 'Create PR instead of direct commit'
+        required: false
+        default: true
+        type: boolean
+
+# Prevent concurrent runs
+concurrency:
+  group: docs-maintenance-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Claude API configuration
+  ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+  # For OpenRouter if preferred
+  # OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+
+jobs:
+  check-staleness:
+    name: Check Documentation Staleness
+    runs-on: ubuntu-latest
+    outputs:
+      is_stale: ${{ steps.verify.outputs.is_stale }}
+      stale_docs: ${{ steps.verify.outputs.stale_docs }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install codebase-index
+        run: pip install codebase-index[semantic]
+
+      - name: Update index
+        run: |
+          if [ -f index.json ]; then
+            codebase-index --load index.json --update -o index.json
+          else
+            codebase-index . -o index.json --build-embeddings
+          fi
+
+      - name: Check documentation staleness
+        id: verify
+        run: |
+          # Check if manifest exists
+          if [ ! -f .doc-manifest.json ]; then
+            echo "is_stale=true" >> $GITHUB_OUTPUT
+            echo "stale_docs=all" >> $GITHUB_OUTPUT
+            echo "No manifest found - full generation needed"
+            exit 0
+          fi
+
+          # Calculate current hashes and compare to manifest
+          STALE_LIST=""
+          IS_STALE="false"
+
+          # Read mappings from config or use defaults
+          if [ -f .doc-config.json ]; then
+            MAPPINGS=$(jq -r '.mappings[] | "\(.source)|\(.doc)"' .doc-config.json)
+          else
+            # Default mappings
+            MAPPINGS="src/api/routers/|docs/api/API_REFERENCE.md
+          src/db/models/|docs/architecture/DATABASE_SCHEMA.md
+          src/auth/|docs/architecture/AUTHENTICATION.md
+          src/frontend/src/pages/|docs/architecture/FRONTEND.md
+          src/openai_agents/|docs/architecture/AGENT_FRAMEWORK.md"
+          fi
+
+          while IFS='|' read -r source doc; do
+            [ -z "$source" ] && continue
+
+            # Calculate current hash
+            CURRENT=$(find "$source" -type f \( -name "*.py" -o -name "*.tsx" -o -name "*.ts" \) -exec md5sum {} \; 2>/dev/null | sort | md5sum | cut -d' ' -f1)
+
+            # Get stored hash
+            STORED=$(jq -r --arg src "$source" '.source_to_doc[$src].source_hash // "none"' .doc-manifest.json)
+
+            if [ "$CURRENT" != "$STORED" ]; then
+              IS_STALE="true"
+              STALE_LIST="$STALE_LIST$source "
+              echo "STALE: $source -> $doc"
+            else
+              echo "CURRENT: $source -> $doc"
+            fi
+          done <<< "$MAPPINGS"
+
+          echo "is_stale=$IS_STALE" >> $GITHUB_OUTPUT
+          echo "stale_docs=$STALE_LIST" >> $GITHUB_OUTPUT
+
+  update-docs:
+    name: Update Documentation
+    needs: check-staleness
+    if: needs.check-staleness.outputs.is_stale == 'true' || github.event.inputs.mode == 'full'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          pip install codebase-index[semantic]
+          # Install Claude Code CLI
+          npm install -g @anthropic-ai/claude-code
+
+      - name: Configure Git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Determine mode
+        id: mode
+        run: |
+          if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
+            echo "mode=${{ github.event.inputs.mode }}" >> $GITHUB_OUTPUT
+          else
+            echo "mode=incremental" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Update index
+        run: |
+          if [ -f index.json ]; then
+            codebase-index --load index.json --update -o index.json
+          else
+            codebase-index . -o index.json --build-embeddings
+          fi
+
+      - name: Run Claude documentation generation
+        run: |
+          MODE="${{ steps.mode.outputs.mode }}"
+          STALE="${{ needs.check-staleness.outputs.stale_docs }}"
+
+          echo "Running documentation generation in $MODE mode"
+          echo "Stale areas: $STALE"
+
+          # Invoke Claude with the generate-docs skill
+          if [ "$MODE" == "full" ]; then
+            claude --skill generate-docs --print "Generate full documentation for this codebase. Create .doc-manifest.json to track state."
+          elif [ "$MODE" == "incremental" ]; then
+            claude --skill generate-docs --print "Run incremental documentation update. Stale areas: $STALE. Only regenerate documentation for stale areas."
+          else
+            claude --skill generate-docs --print "Verify documentation staleness and report status."
+          fi
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+
+      - name: Check for changes
+        id: changes
+        run: |
+          git add -A
+          if git diff --staged --quiet; then
+            echo "has_changes=false" >> $GITHUB_OUTPUT
+          else
+            echo "has_changes=true" >> $GITHUB_OUTPUT
+            echo "Changed files:"
+            git diff --staged --name-only
+          fi
+
+      - name: Create Pull Request
+        if: steps.changes.outputs.has_changes == 'true' && (github.event.inputs.create_pr == 'true' || github.event.inputs.create_pr == '')
+        uses: peter-evans/create-pull-request@v6
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          commit-message: "docs: auto-update documentation"
+          title: "docs: Auto-update documentation"
+          body: |
+            ## Automated Documentation Update
+
+            This PR was automatically generated by the documentation maintenance workflow.
+
+            ### Changes
+            - Updated documentation based on source code changes
+            - Regenerated stale documentation areas: ${{ needs.check-staleness.outputs.stale_docs }}
+
+            ### Mode
+            - **Mode:** ${{ steps.mode.outputs.mode }}
+            - **Trigger:** ${{ github.event_name }}
+
+            ---
+            *Generated by [docs-maintenance.yml](.github/workflows/docs-maintenance.yml)*
+          branch: docs/auto-update-${{ github.run_number }}
+          base: ${{ github.ref_name }}
+          labels: |
+            documentation
+            automated
+
+      - name: Direct commit (if not creating PR)
+        if: steps.changes.outputs.has_changes == 'true' && github.event.inputs.create_pr == 'false'
+        run: |
+          git commit -m "docs: auto-update documentation
+
+          Updated documentation based on source code changes.
+          Stale areas: ${{ needs.check-staleness.outputs.stale_docs }}
+          Mode: ${{ steps.mode.outputs.mode }}
+
+          [skip ci]"
+          git push
+
+  report:
+    name: Documentation Status Report
+    needs: [check-staleness, update-docs]
+    if: always()
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Summary
+        run: |
+          echo "## Documentation Maintenance Report" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          if [ "${{ needs.check-staleness.outputs.is_stale }}" == "true" ]; then
+            echo "### Status: Documentation was stale" >> $GITHUB_STEP_SUMMARY
+            echo "Stale areas: ${{ needs.check-staleness.outputs.stale_docs }}" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "### Status: Documentation is up to date" >> $GITHUB_STEP_SUMMARY
+          fi
+
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Job Results" >> $GITHUB_STEP_SUMMARY
+          echo "- Check Staleness: ${{ needs.check-staleness.result }}" >> $GITHUB_STEP_SUMMARY
+          echo "- Update Docs: ${{ needs.update-docs.result }}" >> $GITHUB_STEP_SUMMARY
