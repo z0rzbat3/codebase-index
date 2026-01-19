@@ -14,11 +14,12 @@ if [ ! -f "index.json" ]; then
     exit 0
 fi
 
-# Check if any Python files are staged
-STAGED_PY=$(git diff --cached --name-only --diff-filter=ACM | grep '\.py$' || true)
+# Check if any supported files are staged
+# Supports: .py, .pyw, .ts, .tsx, .js, .jsx, .sql, docker-compose.yaml/yml
+STAGED_FILES=$(git diff --cached --name-only --diff-filter=ACM | grep -E '\.(py|pyw|ts|tsx|js|jsx|sql)$|docker-compose\.ya?ml$' || true)
 
-if [ -z "$STAGED_PY" ]; then
-    # No Python files changed, skip update
+if [ -z "$STAGED_FILES" ]; then
+    # No supported files changed, skip update
     exit 0
 fi
 
