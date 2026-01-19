@@ -10,7 +10,7 @@ readme = "README.md"
 license = "Proprietary"
 requires-python = ">=3.9"
 authors = [
-    { name = "Isaak Karipidis", email = "ikaripidis@schoox.com" },
+    { name = "Isaak Karipidis" },
 ]
 keywords = [
     "codebase",
