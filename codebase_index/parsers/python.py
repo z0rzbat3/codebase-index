@@ -128,7 +128,14 @@ class PythonParser(BaseParser):
             "fastapi_routes": [],
             "sqlalchemy_tables": [],
             "pydantic_models": [],
+            # Module-level symbols
+            "constants": [],        # UPPER_CASE assignments
+            "module_vars": [],      # Other module-level assignments
+            "type_aliases": [],     # Type alias definitions
         }
+
+        # Process module-level assignments (constants, type aliases)
+        self._process_module_assignments(tree, result)
 
         for node in ast.walk(tree):
             if isinstance(node, ast.ClassDef):
@@ -233,7 +240,8 @@ class PythonParser(BaseParser):
         # Process methods
         for item in node.body:
             if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                method_info = {
+                dynamic_calls = self._extract_dynamic_calls(item)
+                method_info: dict[str, Any] = {
                     "name": item.name,
                     "line": item.lineno,
                     "async": isinstance(item, ast.AsyncFunctionDef),
@@ -242,6 +250,8 @@ class PythonParser(BaseParser):
                     "calls": self._extract_calls(item),
                     "body_hash": self._get_function_body_hash(item),
                 }
+                if dynamic_calls:
+                    method_info["dynamic_calls"] = dynamic_calls
                 class_info["methods"].append(method_info)
 
         result["classes"].append(class_info)
@@ -252,6 +262,9 @@ class PythonParser(BaseParser):
         result: dict[str, Any],
     ) -> None:
         """Process a top-level function definition node."""
+        # Extract calls and dynamic call warnings
+        dynamic_calls = self._extract_dynamic_calls(node)
+
         func_info: dict[str, Any] = {
             "name": node.name,
             "line": node.lineno,
@@ -263,6 +276,11 @@ class PythonParser(BaseParser):
             "calls": self._extract_calls(node),
             "body_hash": self._get_function_body_hash(node),
         }
+
+        # Add dynamic call warnings if any were detected
+        if dynamic_calls:
+            func_info["dynamic_calls"] = dynamic_calls
+
         result["functions"].append(func_info)
 
         # Check for route decorators using config patterns
@@ -285,6 +303,97 @@ class PythonParser(BaseParser):
                             if pattern.get("framework") in ("fastapi", "starlette"):
                                 result["fastapi_routes"].append(route_info)
                         break
+
+    def _process_module_assignments(self, tree: ast.Module, result: dict[str, Any]) -> None:
+        """
+        Extract module-level constants, variables, and type aliases.
+
+        Only processes top-level assignments, not nested ones.
+        """
+        for node in tree.body:
+            # Simple assignment: NAME = value
+            if isinstance(node, ast.Assign):
+                for target in node.targets:
+                    if isinstance(target, ast.Name):
+                        self._categorize_assignment(target.id, node, result)
+
+            # Annotated assignment: NAME: Type = value
+            elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
+                name = node.target.id
+                info: dict[str, Any] = {
+                    "name": name,
+                    "line": node.lineno,
+                }
+
+                # Get annotation
+                if hasattr(ast, 'unparse'):
+                    try:
+                        info["annotation"] = ast.unparse(node.annotation)
+                    except Exception:
+                        pass
+
+                # Get value if present
+                if node.value and hasattr(ast, 'unparse'):
+                    try:
+                        value_str = ast.unparse(node.value)
+                        info["value_preview"] = value_str[:200]
+                    except Exception:
+                        pass
+
+                # Categorize: TypeAlias, constant, or variable
+                annotation_str = info.get("annotation", "")
+                if "TypeAlias" in annotation_str:
+                    result["type_aliases"].append(info)
+                elif self._is_constant_name(name):
+                    result["constants"].append(info)
+                elif not name.startswith("_"):
+                    result["module_vars"].append(info)
+
+    def _categorize_assignment(self, name: str, node: ast.Assign, result: dict[str, Any]) -> None:
+        """Categorize a module-level assignment as constant or variable."""
+        info: dict[str, Any] = {
+            "name": name,
+            "line": node.lineno,
+        }
+
+        try:
+            # Get value preview
+            if hasattr(ast, 'unparse'):
+                value_str = ast.unparse(node.value)
+                info["value_preview"] = value_str[:200]
+
+            # Infer type from value
+            if isinstance(node.value, ast.Dict):
+                info["inferred_type"] = "dict"
+            elif isinstance(node.value, ast.List):
+                info["inferred_type"] = "list"
+            elif isinstance(node.value, ast.Set):
+                info["inferred_type"] = "set"
+            elif isinstance(node.value, ast.Constant):
+                val = node.value.value
+                info["inferred_type"] = type(val).__name__
+                # Store simple values directly
+                if isinstance(val, (str, int, float, bool)) and len(str(val)) < 100:
+                    info["value"] = val
+            elif isinstance(node.value, ast.Call):
+                # e.g., CONFIG = load_config()
+                call_name = self._get_call_name(node.value.func)
+                if call_name:
+                    info["initializer"] = call_name
+        except Exception:
+            pass
+
+        # Categorize by naming convention
+        if self._is_constant_name(name):
+            result["constants"].append(info)
+        elif not name.startswith("_"):
+            result["module_vars"].append(info)
+
+    def _is_constant_name(self, name: str) -> bool:
+        """Check if name follows constant naming convention (UPPER_CASE)."""
+        # Handle _PRIVATE_CONSTANTS too
+        check_name = name[1:] if name.startswith("_") and len(name) > 1 else name
+        return check_name.isupper() and not check_name.startswith("__")
 
     def _extract_route_info(
         self,
@@ -540,6 +649,95 @@ class PythonParser(BaseParser):
                 seen.add(call)
                 unique_calls.append(call)
         return unique_calls
+
+    def _extract_dynamic_calls(self, node: ast.AST) -> list[dict[str, Any]]:
+        """
+        Detect dynamic dispatch patterns that static analysis cannot resolve.
+
+        Returns list of warnings about dynamic calls that may have unknown targets.
+        """
+        dynamic_calls: list[dict[str, Any]] = []
+
+        for child in ast.walk(node):
+            if not isinstance(child, ast.Call):
+                continue
+
+            warning = self._detect_dynamic_pattern(child)
+            if warning:
+                dynamic_calls.append(warning)
+
+        return dynamic_calls
+
+    def _detect_dynamic_pattern(self, node: ast.Call) -> dict[str, Any] | None:
+        """
+        Check if a call uses dynamic dispatch.
+
+        Returns warning dict if dynamic, None otherwise.
+        """
+        # Pattern 1: getattr(obj, "method")() - calling result of getattr
+        if isinstance(node.func, ast.Call):
+            inner = node.func
+            if isinstance(inner.func, ast.Name) and inner.func.id == "getattr":
+                return {
+                    "line": node.lineno,
+                    "pattern": "getattr_call",
+                    "description": "Dynamic method call via getattr()",
+                    "severity": "info",
+                }
+
+        # Pattern 2: handlers[key]() - subscript dispatch
+        if isinstance(node.func, ast.Subscript):
+            try:
+                container = ast.unparse(node.func.value) if hasattr(ast, 'unparse') else "container"
+            except Exception:
+                container = "container"
+            return {
+                "line": node.lineno,
+                "pattern": "subscript_dispatch",
+                "description": f"Dynamic dispatch via {container}[key]()",
+                "severity": "info",
+            }
+
+        # Pattern 3: getattr() call itself (may be called later)
+        if isinstance(node.func, ast.Name) and node.func.id == "getattr":
+            return {
+                "line": node.lineno,
+                "pattern": "getattr",
+                "description": "getattr() lookup - target determined at runtime",
+                "severity": "info",
+            }
+
+        # Pattern 4: eval/exec (dangerous dynamic code execution)
+        if isinstance(node.func, ast.Name) and node.func.id in ("eval", "exec"):
+            return {
+                "line": node.lineno,
+                "pattern": "eval_exec",
+                "description": f"{node.func.id}() executes dynamic code",
+                "severity": "warning",
+            }
+
+        # Pattern 5: importlib.import_module
+        if isinstance(node.func, ast.Attribute) and node.func.attr == "import_module":
+            return {
+                "line": node.lineno,
+                "pattern": "dynamic_import",
+                "description": "Dynamic import - module determined at runtime",
+                "severity": "info",
+            }
+
+        # Pattern 6: globals()/locals() access followed by call
+        if isinstance(node.func, ast.Subscript):
+            if isinstance(node.func.value, ast.Call):
+                inner_call = node.func.value
+                if isinstance(inner_call.func, ast.Name) and inner_call.func.id in ("globals", "locals"):
+                    return {
+                        "line": node.lineno,
+                        "pattern": "globals_locals_dispatch",
+                        "description": f"Dynamic dispatch via {inner_call.func.id}()[key]()",
+                        "severity": "warning",
+                    }
+
+        return None
 
     def _get_call_name(self, node: ast.expr) -> str | None:
         """Extract the name of a call target."""

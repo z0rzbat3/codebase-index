@@ -12,6 +12,7 @@ Requires: pip install codebase-index[semantic]
 from __future__ import annotations
 
 import logging
+import re
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -58,6 +59,60 @@ MODELS = {
 }
 
 DEFAULT_MODEL = "unixcoder"
+
+# Semantic patterns for inferring code purpose from content
+# Format: (regex_pattern, semantic_tag)
+SEMANTIC_PATTERNS = [
+    # Error handling
+    (r'\btry\s*:', "[error-handling]"),
+    (r'\bexcept\s+\w+', "[exception-catch]"),
+    (r'\braise\s+\w+', "[exception-raise]"),
+
+    # Async patterns
+    (r'\basync\s+def\b', "[async]"),
+    (r'\bawait\s+', "[awaits]"),
+
+    # Iteration and loops
+    (r'\bfor\s+\w+\s+in\b', "[iteration]"),
+    (r'\bwhile\s+', "[loop]"),
+    (r'\.map\(|\.filter\(|\.reduce\(', "[functional]"),
+
+    # Caching and retry
+    (r'\bcache\b|@lru_cache|@cached', "[caching]"),
+    (r'\bretry\b|\battempt\b|\bbackoff\b', "[retry-logic]"),
+
+    # I/O patterns
+    (r'\bopen\s*\(|\bwith\s+open\b', "[file-io]"),
+    (r'\brequests\.\w+|\bhttpx\.\w+|\baiohttp', "[http-client]"),
+
+    # Database
+    (r'\bSELECT\b|\bINSERT\b|\bUPDATE\b|\bDELETE\b', "[sql-query]"),
+    (r'\.query\(|\.execute\(|\.fetchall\(', "[database]"),
+    (r'\bsession\b.*\bcommit\b|\btransaction\b', "[transaction]"),
+
+    # Auth/Security
+    (r'\bpassword\b|\bsecret\b|\btoken\b|\bapi_key\b', "[credentials]"),
+    (r'\bhash\b|\bencrypt\b|\bdecrypt\b', "[crypto]"),
+    (r'\bauth\b|\blogin\b|\bpermission\b', "[authentication]"),
+
+    # API patterns
+    (r'@app\.route|@router\.\w+|@api_view', "[http-endpoint]"),
+    (r'\bwebsocket\b|\bws\b', "[websocket]"),
+
+    # Testing
+    (r'\bdef\s+test_|\bassert\b|\bmock\b|\bpatch\b', "[testing]"),
+    (r'\bfixture\b|\bsetup\b|\bteardown\b', "[test-fixture]"),
+
+    # Logging
+    (r'\blogger\.\w+|\blogging\.\w+', "[logging]"),
+
+    # Concurrency
+    (r'\bThread\b|\bProcess\b|\bPool\b', "[concurrency]"),
+    (r'\bLock\b|\bSemaphore\b|\bEvent\b', "[synchronization]"),
+
+    # Validation
+    (r'\bvalidate\b|\bschema\b|\bpydantic\b', "[validation]"),
+]
 
 
 class SemanticSearcher:
@@ -301,8 +356,13 @@ class SemanticSearcher:
         # Extract actual code body
         code_body = self._extract_code_body(source_lines, line)
 
-        # Build text for embedding: name + summary + docstring + code body
+        # Build text for embedding: name + tags + summary + docstring + code body
         text_parts = [full_name]
+
+        # Add semantic tags for conceptual search (e.g., "[caching] [retry-logic]")
+        semantic_tags = self._infer_semantic_tags(symbol, code_body)
+        if semantic_tags:
+            text_parts.append(" ".join(semantic_tags))
 
         # Add LLM-generated summary (high value for conceptual queries)
         summary = symbol.get("summary", "")
@@ -351,6 +411,80 @@ class SemanticSearcher:
             "docstring": docstring[:200] if docstring else "",
             "code_preview": code_body[:200] if code_body else "",
         }
+
+    def _infer_semantic_tags(
+        self,
+        symbol: dict[str, Any],
+        code_body: str,
+    ) -> list[str]:
+        """
+        Infer semantic meaning from code patterns.
+
+        Returns list of semantic tags like "[caching]", "[retry-logic]", etc.
+        These help semantic search find code by concept rather than keyword.
+        """
+        if not code_body:
+            return []
+
+        tags: list[str] = []
+
+        # Check regex patterns
+        for pattern, tag in SEMANTIC_PATTERNS:
+            if re.search(pattern, code_body, re.IGNORECASE):
+                if tag not in tags:
+                    tags.append(tag)
+
+        # Infer from decorators
+        decorators = symbol.get("decorators", [])
+        for dec in decorators:
+            if not dec:
+                continue
+            dec_lower = dec.lower()
+            if "cache" in dec_lower:
+                tags.append("[cached]")
+            elif "retry" in dec_lower:
+                tags.append("[with-retry]")
+            elif "auth" in dec_lower or "login" in dec_lower:
+                tags.append("[requires-auth]")
+            elif "deprecated" in dec_lower:
+                tags.append("[deprecated]")
+            elif dec == "property":
+                tags.append("[property]")
+            elif dec == "staticmethod":
+                tags.append("[static]")
+            elif dec == "classmethod":
+                tags.append("[classmethod]")
+
+        # Infer from function name
+        name = symbol.get("name", "").lower()
+        if name.startswith("test_") or name.startswith("test"):
+            tags.append("[test]")
+        elif name.startswith("_") and not name.startswith("__"):
+            tags.append("[private]")
+        elif name.startswith("get_"):
+            tags.append("[getter]")
+        elif name.startswith("set_"):
+            tags.append("[setter]")
+        elif name.startswith("create_") or name.startswith("make_"):
+            tags.append("[factory]")
+        elif name.startswith("parse_"):
+            tags.append("[parser]")
+        elif name.startswith("validate_") or name.startswith("check_"):
+            tags.append("[validator]")
+        elif name.startswith("handle_") or name.endswith("_handler"):
+            tags.append("[handler]")
+        elif name.startswith("on_"):
+            tags.append("[event-handler]")
+
+        # Deduplicate and limit
+        seen = set()
+        unique_tags = []
+        for tag in tags:
+            if tag not in seen:
+                seen.add(tag)
+                unique_tags.append(tag)
+
+        return unique_tags[:10]  # Limit to prevent embedding bloat
 
     def _extract_code_body(
         self,
