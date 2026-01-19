@@ -505,23 +505,121 @@ def build_embeddings(
     index_data: dict[str, Any],
     root: Path | None = None,
     model: str = DEFAULT_MODEL,
+    changed_files: set[str] | None = None,
 ) -> dict[str, Any]:
     """
-    Convenience function to build embeddings.
+    Build embeddings for symbols in the index.
 
     Args:
         index_data: The codebase index.
         root: Root directory for reading source files.
         model: Model key or HuggingFace model name.
+        changed_files: If provided, only rebuild embeddings for symbols in these files.
+                       Existing embeddings for unchanged files are preserved.
 
     Returns:
         Updated index with embeddings.
     """
+    if changed_files is not None:
+        # Incremental update mode
+        return _incremental_build_embeddings(index_data, root, model, changed_files)
+
+    # Full rebuild
     searcher = SemanticSearcher(model_key=model)
     embedding_data = searcher.build_embeddings(index_data, root=root)
 
     # Add to index
     index_data["semantic"] = embedding_data
+
+    return index_data
+
+
+def _incremental_build_embeddings(
+    index_data: dict[str, Any],
+    root: Path | None,
+    model: str,
+    changed_files: set[str],
+) -> dict[str, Any]:
+    """
+    Incrementally update embeddings for changed files only.
+
+    Args:
+        index_data: The codebase index.
+        root: Root directory for reading source files.
+        model: Model key or HuggingFace model name.
+        changed_files: Set of file paths that changed (added, updated, or deleted).
+
+    Returns:
+        Updated index with embeddings.
+    """
+    existing_semantic = index_data.get("semantic", {})
+    existing_symbols = existing_semantic.get("symbols", [])
+    existing_embeddings = existing_semantic.get("embeddings", [])
+
+    # Check model compatibility
+    stored_model_key = existing_semantic.get("model_key", DEFAULT_MODEL)
+    if stored_model_key != model:
+        logger.warning(
+            "Model changed from %s to %s. Doing full rebuild.",
+            stored_model_key, model
+        )
+        searcher = SemanticSearcher(model_key=model)
+        embedding_data = searcher.build_embeddings(index_data, root=root)
+        index_data["semantic"] = embedding_data
+        return index_data
+
+    # Separate unchanged symbols from changed ones
+    unchanged_symbols = []
+    unchanged_embeddings = []
+
+    for i, symbol in enumerate(existing_symbols):
+        symbol_file = symbol.get("file", "")
+        if symbol_file not in changed_files and i < len(existing_embeddings):
+            unchanged_symbols.append(symbol)
+            unchanged_embeddings.append(existing_embeddings[i])
+
+    logger.info(
+        "Incremental embedding update: keeping %d unchanged, rebuilding for %d changed files",
+        len(unchanged_symbols), len(changed_files)
+    )
+
+    # Build embeddings only for symbols in changed files
+    searcher = SemanticSearcher(model_key=model)
+
+    # Create a filtered index with only changed files
+    changed_files_data = {
+        "files": [
+            f for f in index_data.get("files", [])
+            if f.get("path", "") in changed_files
+        ]
+    }
+
+    if changed_files_data["files"]:
+        new_embedding_data = searcher.build_embeddings(changed_files_data, root=root)
+        new_symbols = new_embedding_data.get("symbols", [])
+        new_embeddings = new_embedding_data.get("embeddings", [])
+    else:
+        new_symbols = []
+        new_embeddings = []
+
+    # Merge unchanged + new
+    all_symbols = unchanged_symbols + new_symbols
+    all_embeddings = unchanged_embeddings + new_embeddings
+
+    embedding_data = {
+        "embeddings": all_embeddings,
+        "symbols": all_symbols,
+        "model": searcher.model_name,
+        "model_key": model,
+        "count": len(all_symbols),
+    }
+
+    index_data["semantic"] = embedding_data
+
+    logger.info(
+        "Embedding update complete: %d total symbols (%d unchanged + %d new/updated)",
+        len(all_symbols), len(unchanged_symbols), len(new_symbols)
+    )
 
     return index_data
 

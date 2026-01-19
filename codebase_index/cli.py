@@ -260,6 +260,9 @@ def main() -> None:
     # Check if we have call graph query options
     has_cg_query = args.callers
 
+    # Track changed files for incremental embedding updates
+    changed_files: set[str] | None = None
+
     # Load existing index or scan
     if args.load:
         result = load_index(args.load, args.verbose)
@@ -328,6 +331,9 @@ def main() -> None:
             print(f"  Unchanged: {changes['unchanged']} files", file=sys.stderr)
             print(f"  Duration: {changes['duration_ms']}ms", file=sys.stderr)
 
+        # Track changed files for incremental embedding updates
+        changed_files = set(changes['added']) | set(changes['updated']) | set(changes['deleted'])
+
         # Use the updated index for output
         result = update_result["index"]
 
@@ -391,13 +397,17 @@ def main() -> None:
         if args.verbose:
             model_info = MODELS.get(model, {})
             model_name = model_info.get("name", model) if model_info else model
-            print(f"Building embeddings with model: {model_name}", file=sys.stderr)
+            if changed_files is not None:
+                print(f"Building embeddings (incremental) with model: {model_name}", file=sys.stderr)
+                print(f"  Changed files: {len(changed_files)}", file=sys.stderr)
+            else:
+                print(f"Building embeddings (full) with model: {model_name}", file=sys.stderr)
 
-        result = build_embeddings(result, root=root, model=model)
+        result = build_embeddings(result, root=root, model=model, changed_files=changed_files)
 
         if args.verbose:
             semantic = result.get("semantic", {})
-            print(f"  Generated embeddings for {semantic.get('count', 0)} symbols", file=sys.stderr)
+            print(f"  Total embeddings: {semantic.get('count', 0)} symbols", file=sys.stderr)
             print(f"  Model: {semantic.get('model', 'unknown')}", file=sys.stderr)
 
         # Fall through to output the updated index
