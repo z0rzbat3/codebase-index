@@ -731,12 +731,54 @@ def init_docs(
     return {"created": created, "skipped": skipped, "errors": errors}
 
 
+def show_workflow_hint() -> None:
+    """Show workflow hint for first-time users."""
+    hint = """codebase-index - Built for Claude Code
+
+Setup:     codebase-index --init-docs
+Index:     codebase-index . -o index.json --build-embeddings --exclude-dirs <dirs>
+           (exclude: node_modules .venv __pycache__ dist build .git)
+Generate:  /generate-docs --init --generate  (in Claude Code)
+
+Ongoing:   /generate-docs --incremental      (in Claude Code, or via hooks/workflows)
+           /generate-docs --review --fix
+
+See -h for all options
+"""
+    print(hint, file=sys.stderr)
+
+
 def main() -> None:
     """Main entry point for the CLI."""
     parser = create_parser()
     args = parser.parse_args()
 
     setup_logging(args.verbose)
+
+    # Show workflow hint if running basic scan without output file
+    # (likely a first-time user exploring the tool)
+    is_basic_scan = (
+        args.path == "."
+        and not args.output
+        and not args.load
+        and not args.summary
+        and not args.init_config
+        and not args.init_docs
+        and not args.callers
+        and not args.check
+        and not args.tests
+        and not args.impact
+        and not args.doc
+        and not args.search
+        and not args.schema
+        and args.keys is None
+        and not args.get
+        and not args.json_path
+    )
+
+    if is_basic_scan:
+        show_workflow_hint()
+        return
 
     # Handle --init-config: just output the template and exit
     if args.init_config:
