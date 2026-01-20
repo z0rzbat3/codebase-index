@@ -67,41 +67,189 @@ src/                          →    docs/
 
 ---
 
+## Prerequisite: Generate index.json
+
+**Before any mode**, ensure `index.json` exists. If not, generate it:
+
+### Step 1: Analyze Project Structure
+
+Review the project to determine appropriate exclusions:
+
+```bash
+# Check what directories exist
+ls -la
+
+# Look for common directories to exclude
+# - node_modules, .venv, __pycache__, dist, build
+# - .git, .archive, logs, backups
+# - vendor, third-party, versions
+```
+
+### Step 2: Generate Index with Exclusions
+
+```bash
+codebase-index . -o index.json --build-embeddings \
+  --exclude-dirs node_modules .venv __pycache__ dist build .git .archive logs backups vendor third-party
+```
+
+**Adjust exclusions based on project:**
+- Python: add `.pytest_cache`, `*.egg-info`
+- Node: add `coverage`, `.next`, `.nuxt`
+- Monorepo: exclude non-relevant packages
+
+### Step 3: Verify Index Quality
+
+```bash
+# Check summary
+codebase-index --load index.json --summary
+
+# Verify file count is reasonable (not scanning junk)
+codebase-index --load index.json --path summary.total_files
+```
+
+**If too many files**: Add more exclusions and regenerate.
+
+### Why This Matters
+
+The index provides:
+- **File categorization**: routes, models, schemas, services
+- **Symbol extraction**: functions, classes, methods with signatures
+- **Call graph**: what calls what (for impact analysis)
+- **Semantic embeddings**: for intelligent doc generation
+
+Without an index, `/generate-docs --init` would have to manually scan with Glob, missing the rich metadata codebase-index provides.
+
+---
+
 ## Mode: Init (`--init`)
 
-Auto-generate `.doc-config.json` by scanning your project structure.
+Auto-generate `.doc-config.json` using a hybrid approach: Glob/Grep/Read for directory scanning, enriched by `index.json` metadata.
 
 ### What It Does
 
-1. **Scans project** for common source directories
-2. **Detects patterns** and assigns appropriate templates
-3. **Creates `.doc-config.json`** with mappings
-4. **Creates `docs/` directory structure** (optional)
+1. **Scans project** with Glob to find source directories
+2. **Reads files** with Grep/Read to detect patterns (imports, decorators)
+3. **Enriches with index.json** for accurate categorization (API endpoints, DB models)
+4. **Creates `.doc-config.json`** with mappings
+5. **Creates `docs/` directory structure** (optional with `--generate`)
 
-### Pattern Detection
+### Two-Layer Detection
 
-| Directory Pattern | Template | Extensions |
-|-------------------|----------|------------|
-| `*/routers/*`, `*/routes/*`, `*/endpoints/*` | `api-endpoint` | `.py` |
-| `*/models/*` (with SQLAlchemy/Django) | `db-model` | `.py` |
-| `*/schemas/*`, `*/serializers/*` | `module` | `.py` |
-| `*/services/*`, `*/utils/*`, `*/helpers/*` | `module` | `.py` |
-| `*/pages/*`, `*/views/*` (React/Vue) | `frontend-page` | `.tsx`, `.vue` |
-| `*/components/*` | `module` | `.tsx`, `.vue` |
-| `*/hooks/*` | `module` | `.ts`, `.tsx` |
-| Other Python modules | `module` | `.py` |
+**Layer 1: Directory Scanning (Glob/Grep/Read)**
+
+| Directory Pattern | Template | Detection |
+|-------------------|----------|-----------|
+| `*/routers/*`, `*/routes/*`, `*/endpoints/*` | `api-endpoint` | Directory name |
+| `*/models/*` | `db-model` | Directory name + ORM imports |
+| `*/schemas/*`, `*/serializers/*` | `module` | Directory name |
+| `*/services/*`, `*/utils/*`, `*/helpers/*` | `module` | Directory name |
+| `*/pages/*`, `*/views/*` | `frontend-page` | Directory name + React/Vue imports |
+| `*/components/*`, `*/hooks/*` | `module` | Directory name |
+
+**Layer 2: Index Enrichment (codebase-index)**
+
+When `index.json` exists, use it to confirm/override:
+
+| Index Data | Confirms | Override |
+|------------|----------|----------|
+| `api_endpoints[].file` | Files with actual routes | Use `api-endpoint` even if not in routers/ |
+| `database.tables[].file` | Files with actual models | Use `db-model` even if not in models/ |
+| `summary.by_category` | File categorization | Accurate counts per directory |
+| `symbol_index` | Functions, classes | Better doc content generation |
 
 ### Usage
 
 ```bash
-# Basic init - scans and creates config
+# Basic init - scans project, creates config
 /generate-docs --init
-
-# Init with custom source root
-/generate-docs --init --source-root src
 
 # Init and immediately generate docs
 /generate-docs --init --generate
+```
+
+### Init Algorithm (Hybrid)
+
+```bash
+# Step 1: Find source directories with Glob
+find src -type d -name "*.py" -o -name "*.ts" -o -name "*.tsx" | ...
+
+# Step 2: For each directory, detect template
+# - Check directory name patterns
+# - Grep for imports (SQLAlchemy, FastAPI, React)
+grep -l "from fastapi" src/api/routers/*.py
+
+# Step 3: If index.json exists, enrich with metadata
+if [ -f index.json ]; then
+  # Get confirmed API files
+  codebase-index --load index.json --path api_endpoints
+
+  # Get confirmed DB model files
+  codebase-index --load index.json --path database.tables
+
+  # Get file counts per category
+  codebase-index --load index.json --path summary.by_category
+fi
+
+# Step 4: Merge and create config
+```
+
+**Pseudocode:**
+
+```python
+def init_config(source_root="src"):
+    mappings = []
+
+    # Layer 1: Glob/Grep scanning
+    for dir_path in find_source_directories(source_root):
+        files = glob(f"{dir_path}/*.py") + glob(f"{dir_path}/*.ts*")
+
+        # Detect template from directory name
+        template = detect_template_from_dirname(dir_path)
+
+        # Refine with content inspection
+        if template == "module" and has_route_decorators(files):
+            template = "api-endpoint"
+        if template == "module" and has_orm_base(files):
+            template = "db-model"
+
+        mappings.append({"source": dir_path, "template": template, ...})
+
+    # Layer 2: Index enrichment (if available)
+    if path_exists("index.json"):
+        index = load_json("index.json")
+
+        # Override with confirmed API files
+        api_files = {ep["file"] for ep in index.get("api_endpoints", [])}
+        for m in mappings:
+            if any(f in api_files for f in files_in(m["source"])):
+                m["template"] = "api-endpoint"
+
+        # Override with confirmed DB models
+        model_files = {t["file"] for t in index.get("database", {}).get("tables", [])}
+        for m in mappings:
+            if any(f in model_files for f in files_in(m["source"])):
+                m["template"] = "db-model"
+
+    return create_config(mappings)
+
+def detect_template_from_dirname(dir_path):
+    name = dir_path.split("/")[-1]
+
+    if name in ["routers", "routes", "endpoints", "api"]:
+        return "api-endpoint"
+    if name == "models":
+        return "db-model"  # Will verify with content/index
+    if name in ["pages", "views"]:
+        return "frontend-page"
+    return "module"
+
+def has_route_decorators(files):
+    # Grep for @router, @app.get, @api_view, etc.
+    return grep_any(files, r"@(router|app)\.(get|post|put|delete)")
+
+def has_orm_base(files):
+    # Grep for SQLAlchemy, Django, Pydantic base classes
+    return grep_any(files, r"class \w+\((Base|Model|BaseModel)\)")
 ```
 
 ### Example Output
@@ -111,24 +259,33 @@ $ /generate-docs --init
 
 Scanning project structure...
 
-Detected source directories:
-  ✓ src/api/routers      (5 .py files)  → api-endpoint
+Layer 1 - Directory detection:
+  ✓ src/api/routers      (5 .py files)  → api-endpoint (dirname)
   ✓ src/api/services     (3 .py files)  → module
-  ✓ src/api/schemas      (4 .py files)  → module
-  ✓ src/db/models        (6 .py files)  → db-model
-  ✓ src/db/repositories  (4 .py files)  → module
-  ✓ src/auth             (3 .py files)  → module
-  ✓ src/frontend/pages   (8 .tsx files) → frontend-page
-  ✓ src/frontend/hooks   (5 .ts files)  → module
+  ? src/core/handlers    (4 .py files)  → module (has @router?)
+
+Layer 2 - Index enrichment:
+  Reading index.json...
+  ✓ src/core/handlers has 8 endpoints → api-endpoint (upgraded)
+  ✓ src/db/models confirmed 6 tables  → db-model
+
+Final mappings:
+  ✓ src/api/routers      → api-endpoint
+  ✓ src/api/services     → module
+  ✓ src/api/schemas      → module
+  ✓ src/core/handlers    → api-endpoint (from index)
+  ✓ src/db/models        → db-model
+  ✓ src/db/repositories  → module
+  ✓ src/frontend/pages   → frontend-page
+  ✓ src/frontend/hooks   → module
 
 Created:
   ✓ .doc-config.json (8 mappings)
-  ✓ docs/ directory structure
 
 Next steps:
   1. Review .doc-config.json and adjust if needed
   2. Add forbidden_terms for your project
-  3. Run: /generate-docs
+  3. Run: /generate-docs --generate
 ```
 
 ### Generated Config
@@ -154,7 +311,6 @@ Next steps:
       "template": "db-model",
       "extensions": [".py"]
     }
-    // ... auto-detected mappings
   ],
 
   "exclude": [
@@ -174,62 +330,11 @@ Next steps:
 }
 ```
 
-### Init Algorithm
-
-```python
-def init_config(source_root="src"):
-    mappings = []
-
-    # 1. Find all directories with source files
-    for dir in find_source_directories(source_root):
-        files = list_files(dir)
-
-        # 2. Determine template based on directory name and content
-        template = detect_template(dir, files)
-
-        # 3. Determine extensions from actual files
-        extensions = get_extensions(files)
-
-        # 4. Create mapping
-        docs_dir = dir.replace(source_root, "docs")
-        mappings.append({
-            "source": dir,
-            "docs": docs_dir,
-            "template": template,
-            "extensions": extensions
-        })
-
-    # 5. Create config
-    return {
-        "version": "2.0",
-        "strategy": "mirror",
-        "source_root": source_root,
-        "docs_root": "docs",
-        "mappings": mappings,
-        ...
-    }
-
-def detect_template(dir_path, files):
-    dir_name = dir_path.split("/")[-1]
-
-    # Check directory name patterns
-    if dir_name in ["routers", "routes", "endpoints", "api"]:
-        return "api-endpoint"
-    if dir_name == "models" and has_orm_imports(files):
-        return "db-model"
-    if dir_name in ["pages", "views"] and has_react_imports(files):
-        return "frontend-page"
-
-    # Default
-    return "module"
-```
-
 ### Flags
 
 | Flag | Description |
 |------|-------------|
-| `--init` | Run init mode |
-| `--source-root DIR` | Root directory to scan (default: `src`) |
+| `--init` | Run init mode (requires index.json) |
 | `--generate` | Run full generation after init |
 | `--force` | Overwrite existing `.doc-config.json` |
 
@@ -795,12 +900,13 @@ Then spawn one clone per checklist item, all in parallel.
 ## Quick Reference
 
 ```bash
-# Initialize (first time setup)
-/generate-docs --init                    # Auto-generate config from project
-/generate-docs --init --generate         # Init + generate docs immediately
+# First time setup (in order)
+codebase-index . -o index.json --build-embeddings --exclude-dirs node_modules .venv __pycache__
+/generate-docs --init                    # Create .doc-config.json (uses index.json)
+/generate-docs --generate                # Generate all docs
 
-# Full generation
-/generate-docs                           # Generate all docs
+# Or combined:
+/generate-docs --init --generate         # Init + generate docs immediately
 
 # Incremental (after code changes)
 /generate-docs --incremental             # Only update changed files
