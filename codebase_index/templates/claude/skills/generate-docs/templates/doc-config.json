@@ -1,0 +1,66 @@
+{
+  "version": "2.0",
+  "strategy": "mirror",
+  "description": "1:1 source-to-doc mapping - EDIT FOR YOUR PROJECT",
+
+  "source_root": "src",
+  "docs_root": "docs",
+  "index_files": true,
+
+  "mappings": [
+    {
+      "source": "src/api/routers",
+      "docs": "docs/api/routers",
+      "template": "api-endpoint",
+      "extensions": [".py"]
+    },
+    {
+      "source": "src/api/services",
+      "docs": "docs/api/services",
+      "template": "module",
+      "extensions": [".py"]
+    },
+    {
+      "source": "src/db/models",
+      "docs": "docs/db/models",
+      "template": "db-model",
+      "extensions": [".py"]
+    },
+    {
+      "source": "src/frontend/src/pages",
+      "docs": "docs/frontend/pages",
+      "template": "frontend-page",
+      "extensions": [".tsx", ".ts"]
+    },
+    {
+      "source": "src/frontend/src/hooks",
+      "docs": "docs/frontend/hooks",
+      "template": "module",
+      "extensions": [".tsx", ".ts"]
+    }
+  ],
+
+  "exclude": [
+    "**/__pycache__/**",
+    "**/__init__.py",
+    "**/*.pyc",
+    "**/node_modules/**",
+    "**/.git/**",
+    "**/dist/**",
+    "**/*.test.*",
+    "**/*.spec.*"
+  ],
+
+  "validation": {
+    "check_references": true,
+    "check_symbols": true,
+    "forbidden_terms": [],
+    "required_sections": ["Overview"]
+  },
+
+  "options": {
+    "max_lines_per_doc": 200,
+    "generate_index": true,
+    "include_source_link": true
+  }
+}

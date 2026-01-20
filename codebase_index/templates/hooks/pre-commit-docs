@@ -1,0 +1,43 @@
+#!/bin/bash
+# ============================================================================
+# Documentation Staleness Check (added by codebase-index --init-docs)
+# ============================================================================
+
+check_doc_staleness() {
+    if [ ! -f ".doc-manifest.json" ]; then return 0; fi
+    if [ ! -f ".doc-config.json" ]; then return 0; fi
+    if ! command -v jq &> /dev/null; then return 0; fi
+
+    local STALE_COUNT=0
+    local STALE_DOCS=""
+
+    # Get source_root from config (default to "src" if not set)
+    local SOURCE_ROOT=$(jq -r '.source_root // "src"' .doc-config.json)
+
+    # Get staged source files matching the source_root
+    local STAGED_SRC=$(git diff --cached --name-only --diff-filter=ACM | grep -E "^${SOURCE_ROOT}/" || true)
+    if [ -z "$STAGED_SRC" ]; then return 0; fi
+
+    # Get tracked source files from manifest
+    local TRACKED_FILES=$(jq -r '.files | keys[]' .doc-manifest.json 2>/dev/null || true)
+
+    for src_file in $TRACKED_FILES; do
+        if echo "$STAGED_SRC" | grep -q "^${src_file}$"; then
+            local DOC_PATH=$(jq -r --arg src "$src_file" '.files[$src].doc_path' .doc-manifest.json)
+            if [ -n "$DOC_PATH" ] && [ "$DOC_PATH" != "null" ]; then
+                STALE_COUNT=$((STALE_COUNT + 1))
+                STALE_DOCS="$STALE_DOCS\n  - $src_file -> $DOC_PATH"
+            fi
+        fi
+    done
+
+    if [ $STALE_COUNT -gt 0 ]; then
+        echo ""
+        echo "Warning: DOCUMENTATION MAY BE STALE ($STALE_COUNT files affected)"
+        echo -e "$STALE_DOCS"
+        echo "Run: /generate-docs --incremental"
+        echo ""
+    fi
+}
+
+check_doc_staleness || true

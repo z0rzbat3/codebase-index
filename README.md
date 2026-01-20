@@ -605,63 +605,288 @@ python -m codebase_index --load index.json --update --build-embeddings -o index.
 
 ## Automated Documentation Maintenance
 
-Keep documentation in sync with code using the included `/generate-docs` skill and CI/CD workflow.
+Keep documentation in sync with code using the **1:1 mirror strategy**: each source file gets its own doc file.
 
-### How It Works
+### Strategy: Mirror Mapping
 
 ```
-┌─────────────────────────────────────────────────────────────────────┐
-│                         LOCAL (pre-commit)                          │
-│  1. Update index.json (automatic)                                   │
-│  2. Warn if docs are stale (non-blocking)                           │
-└─────────────────────────────────────────────────────────────────────┘
-                              │
-                              ▼ (push/merge)
-┌─────────────────────────────────────────────────────────────────────┐
-│                     CI/CD (GitHub Action)                           │
-│  1. Check staleness (compare hashes to manifest)                    │
-│  2. If stale → Run Claude /generate-docs --incremental              │
-│  3. Create PR with updated docs                                     │
-└─────────────────────────────────────────────────────────────────────┘
+src/                          →    docs/
+├── api/                           ├── api/
+│   ├── routers/                   │   ├── routers/
+│   │   ├── agents.py              │   │   ├── agents.md
+│   │   └── users.py               │   │   └── users.md
+│   └── services/                  │   └── services/
+│       └── agent_service.py           └── agent_service.md
+├── db/models/                     ├── db/models/
+│   └── user.py                    │   └── user.md
+└── frontend/pages/                └── frontend/pages/
+    └── Dashboard.tsx                  └── Dashboard.md
 ```
 
-### Quick Setup
+**Benefits:**
+- Small files (~50-200 lines each)
+- Change one source → update one doc
+- Easy to review, meaningful git diffs
+- Parallel generation (one subagent per directory)
 
-```bash
-# Run the setup script in your repo
-./scripts/setup-doc-maintenance.sh
+### System Components
 
-# Or manually:
-# 1. Copy .doc-config.json template
-# 2. Copy .github/workflows/docs-maintenance.yml
-# 3. Edit .doc-config.json for your project
-# 4. Run /generate-docs to initialize
+```
+.claude/
+├── skills/generate-docs/
+│   ├── SKILL.md              ← Skill definition (modes, templates, mandates)
+│   └── templates/
+│       ├── doc-config.json       ← Example config template
+│       ├── doc-manifest.json     ← Example manifest template
+│       ├── docs-maintenance.yml  ← GitHub Actions workflow
+│       └── doc-templates/        ← Markdown templates
+│
+├── agents/
+│   └── doc-generator.md      ← Subagent (YAML frontmatter + instructions)
+
+.doc-config.json              ← Project-specific config (mappings, forbidden_terms)
+.doc-manifest.json            ← Tracks what's generated (hashes, timestamps)
 ```
 
-### The `/generate-docs` Skill
+### The Flow
 
-Available modes:
+**Initial Setup → Incremental Updates → Periodic Review**
+
+```
+┌─────────────────────────────────────────┐
+│         Source Code Changes             │
+└─────────────────┬───────────────────────┘
+                  │
+                  ▼
+┌─────────────────────────────────────────┐
+│     /generate-docs --incremental        │
+│  (Only regenerates changed files)       │
+└─────────────────┬───────────────────────┘
+                  │
+                  ▼
+┌─────────────────────────────────────────┐
+│     /generate-docs --review             │
+│  (Validates accuracy, finds drift)      │
+└─────────────────┬───────────────────────┘
+                  │
+      ┌───────────┴────────────┐
+      │                        │
+      ▼                        ▼
+Issues Found?              All Good
+      │                        │
+      ▼                        ▼
+/generate-docs --review --fix  Done ✓
+```
+
+### Available Modes
 
 | Mode | Command | Description |
 |------|---------|-------------|
-| **Full** | `/generate-docs` | Regenerate all documentation |
-| **Incremental** | `/generate-docs --incremental` | Only update stale docs |
+| **Init** | `/generate-docs --init` | Auto-generate config from project structure |
+| **Full** | `/generate-docs` | Generate all docs from scratch |
+| **Incremental** | `/generate-docs --incremental` | Only update changed files |
 | **Verify** | `/generate-docs --verify` | Check what's stale (no changes) |
-| **Diff** | `/generate-docs --diff` | Preview what would change |
+| **Review** | `/generate-docs --review` | Validate accuracy (100% coverage) |
+| **Review + Fix** | `/generate-docs --review --fix` | Fix all issues found |
 
-### Configuration Files
+---
 
-**`.doc-config.json`** - Maps source directories to documentation files:
+## Manual Approach
+
+### Initial Documentation Creation
+
+```bash
+# Option A: Auto-generate config (recommended)
+/generate-docs --init              # Scans project, creates .doc-config.json
+/generate-docs --init --generate   # Init + generate docs immediately
+
+# Option B: Manual config creation
+cat > .doc-config.json << 'EOF'
+{
+  "version": "2.0",
+  "strategy": "mirror",
+  "source_root": "src",
+  "docs_root": "docs",
+  "mappings": [
+    {"source": "src/api/routers", "docs": "docs/api/routers", "template": "api-endpoint", "extensions": [".py"]},
+    {"source": "src/db/models", "docs": "docs/db/models", "template": "db-model", "extensions": [".py"]},
+    {"source": "src/frontend/pages", "docs": "docs/frontend/pages", "template": "frontend-page", "extensions": [".tsx"]}
+  ],
+  "validation": {
+    "forbidden_terms": ["deprecated_thing", "old_api"],
+    "required_sections": ["Overview"]
+  }
+}
+EOF
+
+# Then generate docs
+/generate-docs
+```
+
+### Daily/Weekly Workflow
+
+```bash
+# After making code changes:
+/generate-docs --incremental    # Update only changed docs
+
+# Before PR or weekly:
+/generate-docs --review         # Check for issues
+
+# If issues found:
+/generate-docs --review --fix   # Auto-fix all issues
+```
+
+### Biweekly Deep Review
+
+```bash
+# Every 2 weeks - comprehensive review
+/generate-docs --review --fix
+
+# This catches:
+# - Forbidden terms in ALL docs (including legacy)
+# - Symbol drift (renamed functions, removed classes)
+# - Stale references (invalid file:line)
+# - Missing required sections
+```
+
+---
+
+## Automatic Approach
+
+### Option 1: GitHub Actions (CI/CD)
+
+Copy the workflow template to your repo:
+
+```bash
+cp .claude/skills/generate-docs/templates/docs-maintenance.yml .github/workflows/
+```
+
+**Triggers:**
+- Push to `main` or `develop` (when `src/` changes)
+- Manual dispatch with mode selection
+
+**Flow:**
+```
+Push to main → Check staleness → If stale → Run Claude → Create PR
+```
+
+**Required secret:** `ANTHROPIC_API_KEY`
+
+### Option 2: Pre-commit Hook
+
+```bash
+# .git/hooks/pre-commit (or via pre-commit framework)
+#!/bin/bash
+
+# Check if source files changed
+CHANGED=$(git diff --cached --name-only | grep -E '^src/.*\.(py|ts|tsx)$')
+
+if [ -n "$CHANGED" ]; then
+  echo "Source files changed, checking docs..."
+
+  # Quick staleness check (non-blocking)
+  claude --skill generate-docs --print "/generate-docs --verify" --max-turns 3
+
+  if [ $? -ne 0 ]; then
+    echo "⚠️  Documentation may be stale. Run: /generate-docs --incremental"
+  fi
+fi
+```
+
+### Option 3: Scheduled Review (Cron)
+
+```yaml
+# .github/workflows/docs-review.yml
+name: Biweekly Doc Review
+
+on:
+  schedule:
+    - cron: '0 9 1,15 * *'  # 9am on 1st and 15th of each month
+
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run doc review
+        run: claude --skill generate-docs --print "/generate-docs --review --fix"
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      - name: Create PR if changes
+        uses: peter-evans/create-pull-request@v6
+        with:
+          title: "docs: biweekly review fixes"
+          branch: docs/biweekly-review
+```
+
+---
+
+## Recommended Cadence
+
+| When | Command | Automation |
+|------|---------|------------|
+| **First time setup** | `/generate-docs --init --generate` | Manual (one-time) |
+| **After code changes** | `/generate-docs --incremental` | Pre-commit hook (warn) |
+| **Before PR** | `/generate-docs --review` | CI check |
+| **Biweekly** | `/generate-docs --review --fix` | Scheduled action |
+| **On merge to main** | `/generate-docs --incremental` | GitHub Action |
+
+---
+
+## Configuration Reference
+
+### `.doc-config.json`
+
 ```json
 {
+  "version": "2.0",
+  "strategy": "mirror",
+  "source_root": "src",
+  "docs_root": "docs",
+  "index_files": true,
+
   "mappings": [
-    {"source": "src/api/", "doc": "docs/api/API.md"},
-    {"source": "src/db/", "doc": "docs/DATABASE.md"}
-  ]
+    {
+      "source": "src/api/routers",
+      "docs": "docs/api/routers",
+      "template": "api-endpoint",
+      "extensions": [".py"]
+    }
+  ],
+
+  "exclude": [
+    "**/__pycache__/**",
+    "**/__init__.py",
+    "**/node_modules/**"
+  ],
+
+  "validation": {
+    "check_references": true,
+    "check_symbols": true,
+    "forbidden_terms": ["chainlit", "deprecated"],
+    "required_sections": ["Overview"]
+  }
 }
 ```
 
-**`.doc-manifest.json`** - Tracks documentation state (hashes, timestamps).
+### `.doc-manifest.json`
+
+Tracks generated documentation state:
+
+```json
+{
+  "version": "2.0",
+  "last_updated": "2024-01-19T20:00:00Z",
+  "files": {
+    "src/api/routers/agents.py": {
+      "doc_path": "docs/api/routers/agents.md",
+      "source_hash": "abc123",
+      "doc_hash": "def456",
+      "last_updated": "2024-01-19T20:00:00Z"
+    }
+  }
+}
+```
 
 ### Included Files
 
@@ -671,25 +896,13 @@ Available modes:
 └── templates/
     ├── doc-config.json             # Config template
     ├── doc-manifest.json           # Manifest template
-    └── docs-maintenance.yml        # GitHub Action template
-
-.github/workflows/
-└── docs-maintenance.yml            # CI/CD workflow
+    ├── docs-maintenance.yml        # GitHub Action template
+    └── doc-templates/              # Markdown templates
 
 scripts/
 ├── setup-doc-maintenance.sh        # One-command setup
 └── hooks/pre-commit-docs           # Pre-commit staleness checker
 ```
-
-### GitHub Action
-
-The workflow:
-1. Triggers on merge to `main` or `develop`
-2. Checks if docs are stale (source hash changed)
-3. Runs Claude with `/generate-docs --incremental`
-4. Creates a PR with updated documentation
-
-**Required secret:** `ANTHROPIC_API_KEY`
 
 ---
 

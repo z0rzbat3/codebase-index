@@ -14,6 +14,8 @@ import warnings
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+import shutil
+
 from codebase_index import __version__
 from codebase_index.config import (
     DEFAULT_CONFIG,
@@ -393,6 +395,29 @@ findings against actual source code.
         help="Generate a starter config file (customize with LLM, then use --config)",
     )
 
+    # Documentation maintenance setup
+    docs_group = parser.add_argument_group("Documentation Maintenance")
+    docs_group.add_argument(
+        "--init-docs",
+        action="store_true",
+        help="Initialize documentation maintenance system (Claude skills, workflows, hooks)",
+    )
+    docs_group.add_argument(
+        "--init-docs-force",
+        action="store_true",
+        help="Force overwrite existing files when initializing docs system",
+    )
+    docs_group.add_argument(
+        "--init-docs-skip-hooks",
+        action="store_true",
+        help="Skip pre-commit hook installation",
+    )
+    docs_group.add_argument(
+        "--init-docs-skip-workflow",
+        action="store_true",
+        help="Skip GitHub workflow installation",
+    )
+
     # Call graph query options
     cg_group = parser.add_argument_group("Call Graph Queries")
     cg_group.add_argument(
@@ -513,6 +538,199 @@ def setup_logging(verbose: bool) -> None:
     )
 
 
+def get_templates_dir() -> Path:
+    """Get the path to bundled templates directory."""
+    # Try importlib.resources first (Python 3.9+)
+    try:
+        from importlib.resources import files
+        return Path(str(files("codebase_index") / "templates"))
+    except (ImportError, TypeError):
+        # Fallback: relative to this file
+        return Path(__file__).parent / "templates"
+
+
+def init_docs(
+    force: bool = False,
+    skip_hooks: bool = False,
+    skip_workflow: bool = False,
+) -> dict[str, list[str]]:
+    """Initialize documentation maintenance system.
+
+    Copies Claude skills, agents, workflows, and hooks to the current project.
+
+    Args:
+        force: Overwrite existing files
+        skip_hooks: Don't install pre-commit hook
+        skip_workflow: Don't copy GitHub workflow
+
+    Returns:
+        Dict with 'created', 'skipped', and 'errors' lists
+    """
+    templates_dir = get_templates_dir()
+    if not templates_dir.exists():
+        return {
+            "created": [],
+            "skipped": [],
+            "errors": [f"Templates directory not found: {templates_dir}"],
+        }
+
+    created: list[str] = []
+    skipped: list[str] = []
+    errors: list[str] = []
+
+    # 1. Copy .claude/skills/generate-docs/
+    src_skill = templates_dir / "claude" / "skills" / "generate-docs"
+    dst_skill = Path(".claude/skills/generate-docs")
+    if dst_skill.exists() and not force:
+        skipped.append(str(dst_skill))
+    else:
+        try:
+            dst_skill.parent.mkdir(parents=True, exist_ok=True)
+            if dst_skill.exists():
+                shutil.rmtree(dst_skill)
+            shutil.copytree(src_skill, dst_skill)
+            created.append(str(dst_skill))
+        except Exception as e:
+            errors.append(f"Failed to copy skill: {e}")
+
+    # 2. Copy .claude/agents/doc-generator.md
+    src_agent = templates_dir / "claude" / "agents" / "doc-generator.md"
+    dst_agent = Path(".claude/agents/doc-generator.md")
+    if dst_agent.exists() and not force:
+        skipped.append(str(dst_agent))
+    else:
+        try:
+            dst_agent.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy(src_agent, dst_agent)
+            created.append(str(dst_agent))
+        except Exception as e:
+            errors.append(f"Failed to copy agent: {e}")
+
+    # 3. Create .doc-config.json
+    dst_config = Path(".doc-config.json")
+    if dst_config.exists() and not force:
+        skipped.append(str(dst_config))
+    else:
+        try:
+            config_content = {
+                "version": "2.0",
+                "strategy": "mirror",
+                "description": "Documentation mapping configuration for /generate-docs skill",
+                "source_root": "src",
+                "docs_root": "docs",
+                "index_files": True,
+                "mappings": [
+                    {
+                        "source": "src/api/routers",
+                        "docs": "docs/api/routers",
+                        "template": "api-endpoint",
+                        "extensions": [".py"],
+                    },
+                    {
+                        "source": "src/db/models",
+                        "docs": "docs/db/models",
+                        "template": "db-model",
+                        "extensions": [".py"],
+                    },
+                    {
+                        "source": "src/services",
+                        "docs": "docs/services",
+                        "template": "module",
+                        "extensions": [".py"],
+                    },
+                ],
+                "exclude": [
+                    "**/__pycache__/**",
+                    "**/__init__.py",
+                    "**/__main__.py",
+                    "**/test_*.py",
+                    "**/*_test.py",
+                    "**/node_modules/**",
+                    "**/dist/**",
+                    "**/.venv/**",
+                ],
+                "validation": {
+                    "check_references": True,
+                    "check_symbols": True,
+                    "forbidden_terms": [],
+                    "required_sections": ["Overview"],
+                },
+            }
+            with open(dst_config, "w", encoding="utf-8") as f:
+                json.dump(config_content, f, indent=2)
+                f.write("\n")
+            created.append(str(dst_config))
+        except Exception as e:
+            errors.append(f"Failed to create config: {e}")
+
+    # 4. Create .doc-manifest.json
+    dst_manifest = Path(".doc-manifest.json")
+    if dst_manifest.exists() and not force:
+        skipped.append(str(dst_manifest))
+    else:
+        try:
+            manifest_content = {
+                "version": "2.0",
+                "strategy": "mirror",
+                "last_updated": None,
+                "files": {},
+                "indexes": {},
+            }
+            with open(dst_manifest, "w", encoding="utf-8") as f:
+                json.dump(manifest_content, f, indent=2)
+                f.write("\n")
+            created.append(str(dst_manifest))
+        except Exception as e:
+            errors.append(f"Failed to create manifest: {e}")
+
+    # 5. Install pre-commit hook (append if exists)
+    if not skip_hooks:
+        src_hook = templates_dir / "hooks" / "pre-commit-docs"
+        dst_hook = Path(".git/hooks/pre-commit")
+
+        if not Path(".git").exists():
+            skipped.append(str(dst_hook) + " (not a git repo)")
+        elif dst_hook.exists():
+            # Check if hook already has doc staleness check
+            try:
+                hook_content = dst_hook.read_text(encoding="utf-8")
+                if "check_doc_staleness" in hook_content:
+                    skipped.append(str(dst_hook) + " (already has doc check)")
+                else:
+                    # Append our hook
+                    with open(dst_hook, "a", encoding="utf-8") as f:
+                        f.write("\n")
+                        f.write(src_hook.read_text(encoding="utf-8"))
+                    created.append(str(dst_hook) + " (appended)")
+            except Exception as e:
+                errors.append(f"Failed to update hook: {e}")
+        else:
+            try:
+                dst_hook.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy(src_hook, dst_hook)
+                dst_hook.chmod(0o755)
+                created.append(str(dst_hook))
+            except Exception as e:
+                errors.append(f"Failed to create hook: {e}")
+
+    # 6. Copy GitHub workflow
+    if not skip_workflow:
+        src_workflow = templates_dir / "workflows" / "docs-maintenance.yml"
+        dst_workflow = Path(".github/workflows/docs-maintenance.yml")
+
+        if dst_workflow.exists() and not force:
+            skipped.append(str(dst_workflow))
+        else:
+            try:
+                dst_workflow.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy(src_workflow, dst_workflow)
+                created.append(str(dst_workflow))
+            except Exception as e:
+                errors.append(f"Failed to copy workflow: {e}")
+
+    return {"created": created, "skipped": skipped, "errors": errors}
+
+
 def main() -> None:
     """Main entry point for the CLI."""
     parser = create_parser()
@@ -523,6 +741,37 @@ def main() -> None:
     # Handle --init-config: just output the template and exit
     if args.init_config:
         print(get_config_template())
+        return
+
+    # Handle --init-docs: initialize documentation maintenance system
+    if args.init_docs:
+        result = init_docs(
+            force=args.init_docs_force,
+            skip_hooks=args.init_docs_skip_hooks,
+            skip_workflow=args.init_docs_skip_workflow,
+        )
+
+        print("Initializing documentation maintenance system...\n")
+
+        if result["created"]:
+            print("Created:")
+            for path in result["created"]:
+                print(f"  + {path}")
+
+        if result["skipped"]:
+            print("\nSkipped (already exist):")
+            for path in result["skipped"]:
+                print(f"  - {path}")
+
+        if result["errors"]:
+            print("\nErrors:")
+            for error in result["errors"]:
+                print(f"  ! {error}")
+
+        print("\nNext steps:")
+        print("  1. Edit .doc-config.json for your project structure")
+        print("  2. Run /generate-docs to create initial documentation")
+        print("  3. Add ANTHROPIC_API_KEY to GitHub Secrets (if using workflow)")
         return
 
     # Load config if specified

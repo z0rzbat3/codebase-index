@@ -1,0 +1,187 @@
+name: Documentation Maintenance
+
+on:
+  # Run on merges to main or develop
+  push:
+    branches:
+      - main
+      - develop
+    paths:
+      # Only run when source code changes, not docs
+      - 'src/**'
+      - '!src/**/*.md'
+
+  # Allow manual trigger
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: 'Documentation mode'
+        required: true
+        default: 'incremental'
+        type: choice
+        options:
+          - verify
+          - incremental
+          - full
+      create_pr:
+        description: 'Create PR instead of direct commit'
+        required: false
+        default: true
+        type: boolean
+
+# Prevent concurrent runs
+concurrency:
+  group: docs-maintenance-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+
+jobs:
+  check-staleness:
+    name: Check Documentation Staleness
+    runs-on: ubuntu-latest
+    outputs:
+      is_stale: ${{ steps.verify.outputs.is_stale }}
+      stale_docs: ${{ steps.verify.outputs.stale_docs }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install codebase-index
+        run: pip install codebase-index[semantic]
+
+      - name: Update index
+        run: |
+          if [ -f index.json ]; then
+            codebase-index --load index.json --update -o index.json
+          else
+            codebase-index . -o index.json --build-embeddings
+          fi
+
+      - name: Check documentation staleness
+        id: verify
+        run: |
+          if [ ! -f .doc-manifest.json ]; then
+            echo "is_stale=true" >> $GITHUB_OUTPUT
+            echo "stale_docs=all" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          STALE_LIST=""
+          IS_STALE="false"
+
+          if [ -f .doc-config.json ]; then
+            MAPPINGS=$(jq -r '.mappings[] | "\(.source)|\(.doc)"' .doc-config.json)
+          else
+            MAPPINGS="src/api/|docs/api/
+          src/db/|docs/architecture/DATABASE.md
+          src/auth/|docs/architecture/AUTH.md"
+          fi
+
+          while IFS='|' read -r source doc; do
+            [ -z "$source" ] && continue
+            CURRENT=$(find "$source" -type f \( -name "*.py" -o -name "*.tsx" -o -name "*.ts" \) -exec md5sum {} \; 2>/dev/null | sort | md5sum | cut -d' ' -f1)
+            STORED=$(jq -r --arg src "$source" '.source_to_doc[$src].source_hash // "none"' .doc-manifest.json)
+            if [ "$CURRENT" != "$STORED" ]; then
+              IS_STALE="true"
+              STALE_LIST="$STALE_LIST$source "
+            fi
+          done <<< "$MAPPINGS"
+
+          echo "is_stale=$IS_STALE" >> $GITHUB_OUTPUT
+          echo "stale_docs=$STALE_LIST" >> $GITHUB_OUTPUT
+
+  update-docs:
+    name: Update Documentation
+    needs: check-staleness
+    if: needs.check-staleness.outputs.is_stale == 'true' || github.event.inputs.mode == 'full'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          pip install codebase-index[semantic]
+          npm install -g @anthropic-ai/claude-code
+
+      - name: Configure Git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Determine mode
+        id: mode
+        run: |
+          if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
+            echo "mode=${{ github.event.inputs.mode }}" >> $GITHUB_OUTPUT
+          else
+            echo "mode=incremental" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Update index
+        run: |
+          if [ -f index.json ]; then
+            codebase-index --load index.json --update -o index.json
+          else
+            codebase-index . -o index.json --build-embeddings
+          fi
+
+      - name: Run Claude documentation generation
+        run: |
+          MODE="${{ steps.mode.outputs.mode }}"
+          STALE="${{ needs.check-staleness.outputs.stale_docs }}"
+
+          if [ "$MODE" == "full" ]; then
+            claude --skill generate-docs --print "Generate full documentation. Create .doc-manifest.json."
+          elif [ "$MODE" == "incremental" ]; then
+            claude --skill generate-docs --print "Run incremental update. Stale: $STALE"
+          fi
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+
+      - name: Check for changes
+        id: changes
+        run: |
+          git add -A
+          if git diff --staged --quiet; then
+            echo "has_changes=false" >> $GITHUB_OUTPUT
+          else
+            echo "has_changes=true" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Create Pull Request
+        if: steps.changes.outputs.has_changes == 'true'
+        uses: peter-evans/create-pull-request@v6
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          commit-message: "docs: auto-update documentation"
+          title: "docs: Auto-update documentation"
+          body: |
+            ## Automated Documentation Update
+
+            Updated docs for: ${{ needs.check-staleness.outputs.stale_docs }}
+            Mode: ${{ steps.mode.outputs.mode }}
+          branch: docs/auto-update-${{ github.run_number }}
+          base: ${{ github.ref_name }}
+          labels: |
+            documentation
+            automated

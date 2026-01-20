@@ -59,10 +59,179 @@ src/                          →    docs/
 
 | Mode | Command | Description |
 |------|---------|-------------|
+| **Init** | `/generate-docs --init` | Auto-generate config from project structure |
 | **Full** | `/generate-docs` | Generate all docs |
 | **Incremental** | `/generate-docs --incremental` | Only changed files |
 | **Verify** | `/generate-docs --verify` | Check staleness |
 | **Review** | `/generate-docs --review` | Validate accuracy |
+
+---
+
+## Mode: Init (`--init`)
+
+Auto-generate `.doc-config.json` by scanning your project structure.
+
+### What It Does
+
+1. **Scans project** for common source directories
+2. **Detects patterns** and assigns appropriate templates
+3. **Creates `.doc-config.json`** with mappings
+4. **Creates `docs/` directory structure** (optional)
+
+### Pattern Detection
+
+| Directory Pattern | Template | Extensions |
+|-------------------|----------|------------|
+| `*/routers/*`, `*/routes/*`, `*/endpoints/*` | `api-endpoint` | `.py` |
+| `*/models/*` (with SQLAlchemy/Django) | `db-model` | `.py` |
+| `*/schemas/*`, `*/serializers/*` | `module` | `.py` |
+| `*/services/*`, `*/utils/*`, `*/helpers/*` | `module` | `.py` |
+| `*/pages/*`, `*/views/*` (React/Vue) | `frontend-page` | `.tsx`, `.vue` |
+| `*/components/*` | `module` | `.tsx`, `.vue` |
+| `*/hooks/*` | `module` | `.ts`, `.tsx` |
+| Other Python modules | `module` | `.py` |
+
+### Usage
+
+```bash
+# Basic init - scans and creates config
+/generate-docs --init
+
+# Init with custom source root
+/generate-docs --init --source-root src
+
+# Init and immediately generate docs
+/generate-docs --init --generate
+```
+
+### Example Output
+
+```
+$ /generate-docs --init
+
+Scanning project structure...
+
+Detected source directories:
+  ✓ src/api/routers      (5 .py files)  → api-endpoint
+  ✓ src/api/services     (3 .py files)  → module
+  ✓ src/api/schemas      (4 .py files)  → module
+  ✓ src/db/models        (6 .py files)  → db-model
+  ✓ src/db/repositories  (4 .py files)  → module
+  ✓ src/auth             (3 .py files)  → module
+  ✓ src/frontend/pages   (8 .tsx files) → frontend-page
+  ✓ src/frontend/hooks   (5 .ts files)  → module
+
+Created:
+  ✓ .doc-config.json (8 mappings)
+  ✓ docs/ directory structure
+
+Next steps:
+  1. Review .doc-config.json and adjust if needed
+  2. Add forbidden_terms for your project
+  3. Run: /generate-docs
+```
+
+### Generated Config
+
+```json
+{
+  "version": "2.0",
+  "strategy": "mirror",
+  "source_root": "src",
+  "docs_root": "docs",
+  "index_files": true,
+
+  "mappings": [
+    {
+      "source": "src/api/routers",
+      "docs": "docs/api/routers",
+      "template": "api-endpoint",
+      "extensions": [".py"]
+    },
+    {
+      "source": "src/db/models",
+      "docs": "docs/db/models",
+      "template": "db-model",
+      "extensions": [".py"]
+    }
+    // ... auto-detected mappings
+  ],
+
+  "exclude": [
+    "**/__pycache__/**",
+    "**/__init__.py",
+    "**/node_modules/**",
+    "**/*.test.*",
+    "**/*.spec.*"
+  ],
+
+  "validation": {
+    "check_references": true,
+    "check_symbols": true,
+    "forbidden_terms": [],
+    "required_sections": ["Overview"]
+  }
+}
+```
+
+### Init Algorithm
+
+```python
+def init_config(source_root="src"):
+    mappings = []
+
+    # 1. Find all directories with source files
+    for dir in find_source_directories(source_root):
+        files = list_files(dir)
+
+        # 2. Determine template based on directory name and content
+        template = detect_template(dir, files)
+
+        # 3. Determine extensions from actual files
+        extensions = get_extensions(files)
+
+        # 4. Create mapping
+        docs_dir = dir.replace(source_root, "docs")
+        mappings.append({
+            "source": dir,
+            "docs": docs_dir,
+            "template": template,
+            "extensions": extensions
+        })
+
+    # 5. Create config
+    return {
+        "version": "2.0",
+        "strategy": "mirror",
+        "source_root": source_root,
+        "docs_root": "docs",
+        "mappings": mappings,
+        ...
+    }
+
+def detect_template(dir_path, files):
+    dir_name = dir_path.split("/")[-1]
+
+    # Check directory name patterns
+    if dir_name in ["routers", "routes", "endpoints", "api"]:
+        return "api-endpoint"
+    if dir_name == "models" and has_orm_imports(files):
+        return "db-model"
+    if dir_name in ["pages", "views"] and has_react_imports(files):
+        return "frontend-page"
+
+    # Default
+    return "module"
+```
+
+### Flags
+
+| Flag | Description |
+|------|-------------|
+| `--init` | Run init mode |
+| `--source-root DIR` | Root directory to scan (default: `src`) |
+| `--generate` | Run full generation after init |
+| `--force` | Overwrite existing `.doc-config.json` |
 
 ---
 
@@ -626,26 +795,25 @@ Then spawn one clone per checklist item, all in parallel.
 ## Quick Reference
 
 ```bash
-# Setup
-./scripts/setup-doc-maintenance.sh
+# Initialize (first time setup)
+/generate-docs --init                    # Auto-generate config from project
+/generate-docs --init --generate         # Init + generate docs immediately
 
 # Full generation
-/generate-docs
+/generate-docs                           # Generate all docs
 
-# Check what's stale
-/generate-docs --verify
+# Incremental (after code changes)
+/generate-docs --incremental             # Only update changed files
 
-# Update only changed
-/generate-docs --incremental
+# Verification
+/generate-docs --verify                  # Check what's stale (no changes)
 
-# Validate accuracy
-/generate-docs --review
+# Review (validation)
+/generate-docs --review                  # Validate all docs (100% coverage)
+/generate-docs --review --fix            # Fix all issues found
 
 # Specific directory
-/generate-docs src/api/routers
-
-# Review and fix
-/generate-docs --review --fix
+/generate-docs src/api/routers           # Generate docs for specific dir
 ```
 
 ---
