@@ -46,27 +46,20 @@ python -m codebase_index . --exclude-dirs docs examples vendor -o index.json
 ## Installation
 
 ```bash
-# Clone the repository
-git clone https://github.com/your-repo/codebase-index.git
-cd codebase-index
+# Install from GitHub (Python 3.9+)
+pip install git+https://github.com/z0rzbat3/codebase-index.git
 
-# Run as a module
-python -m codebase_index .
+# With semantic search (embeddings for code search)
+pip install "codebase-index[semantic] @ git+https://github.com/z0rzbat3/codebase-index.git"
 
-# Or use the legacy single-file script
-python codebase_index.py .
+# Verify installation
+codebase-index --version
 ```
 
-**Requirements:**
-- Python 3.9+
-- PyYAML (optional, for config file support)
-
-**Optional Features:**
-```bash
-# Semantic search (find code by description)
-# Uses code-specific models: unixcoder, codebert, codet5
-pip install codebase-index[semantic]
-```
+**Optional dependencies:**
+- `[semantic]` - sentence-transformers for code embeddings
+- `[yaml]` - PyYAML for config file support
+- `[all]` - everything
 
 ## System Requirements
 
